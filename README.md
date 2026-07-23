@@ -9,19 +9,18 @@ A gesture never has a hard-coded action. Backends publish normalized events, bin
 
 ## Project status
 
-`0.1.0` is the safe foundation release. It includes:
+`0.2.0` is the read-only observer release. It includes everything from the
+foundation release plus:
 
-- a versioned TOML configuration format;
-- a generic event model that is not limited to touchpads;
-- gesture-to-action bindings with priorities and consume semantics;
-- pluggable condition and action provider interfaces;
-- built-in `core.log`, `core.noop`, and opt-in `process.run` actions;
-- live configuration reload;
-- a Unix-socket daemon protocol;
-- a CLI for validation, inspection, and simulated events;
-- an input/output backend interface for the later evdev/uinput implementation.
+- Linux evdev device discovery;
+- touchpad/touchscreen/pointer candidate classification;
+- a non-grabbing raw event monitor;
+- JSON Lines output for future recording and replay tools.
 
-It **does not yet grab the real touchpad**. That is intentional: this version can run alongside your current setup without breaking input. Hardware proxying is the next milestone.
+It **does not grab the real touchpad**, create a virtual input device, or inject
+input. That is intentional: this version can run alongside the current setup
+while we identify the exact hardware event stream. Hardware proxying remains
+the next milestone.
 
 ## Architecture
 
@@ -96,3 +95,13 @@ Future evdev/uinput access will use narrow udev rules and a dedicated group. Ges
 ## License
 
 GPL-3.0-or-later. Contributions remain open source.
+
+
+## Device discovery and read-only observation
+
+```bash
+cargo run -p gesture-cli -- devices --touchpads-only
+cargo run -p gesture-cli -- monitor --device /dev/input/event8 --idle-timeout 10
+```
+
+The monitor never grabs the device. See [the observer documentation](docs/DEVICE_OBSERVER.md).

@@ -1,13 +1,20 @@
 //! Hardware abstraction boundary.
 //!
-//! The foundation release intentionally ships only a null backend. Milestone 1
-//! will add evdev/libinput input and uinput output implementations behind these
-//! contracts, keeping gesture recognition independent from configured actions.
+//! Device discovery and the observer are deliberately read-only. Exclusive
+//! proxying, uinput cloning, and recognizers will be implemented behind these
+//! contracts in later milestones, keeping gestures independent from actions.
+
+mod evdev_observer;
 
 use anyhow::Result;
 use async_trait::async_trait;
 use gesture_core::InputEvent;
 use tokio::sync::mpsc;
+
+pub use evdev_observer::{
+    enumerate_devices, inspect_device, DeviceCapabilities, DeviceClass, DeviceInfo, EvdevObserver,
+    RawInputEvent,
+};
 
 #[derive(Debug, Clone, Default)]
 pub struct BackendCapabilities {

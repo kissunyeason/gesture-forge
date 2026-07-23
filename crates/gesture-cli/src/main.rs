@@ -1,9 +1,10 @@
-use std::{collections::BTreeMap, env, path::PathBuf};
+use std::{collections::BTreeMap, env, path::PathBuf, time::Duration};
 
 use anyhow::{Context, Result};
 use clap::{Args, Parser, Subcommand};
 use gesture_actions::{default_action_registry, default_condition_registry};
 use gesture_core::{Config, Engine, InputEvent};
+use gesture_device::{enumerate_devices, DeviceInfo, EvdevObserver};
 use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
     net::UnixStream,
@@ -24,6 +25,10 @@ enum Command {
     Inspect(ConfigArgs),
     /// Send a normalized event to a running GestureForge daemon.
     Simulate(SimulateArgs),
+    /// List readable Linux evdev input devices.
+    Devices(DevicesArgs),
+    /// Observe raw events from one device without grabbing it.
+    Monitor(MonitorArgs),
 }
 
 #[derive(Debug, Args)]
@@ -56,12 +61,40 @@ struct SimulateArgs {
     window_title: Option<String>,
 }
 
+#[derive(Debug, Args)]
+struct DevicesArgs {
+    /// Emit a JSON array instead of the human-readable table.
+    #[arg(long)]
+    json: bool,
+    /// Show only devices inferred to be touchpads.
+    #[arg(long)]
+    touchpads_only: bool,
+}
+
+#[derive(Debug, Args)]
+struct MonitorArgs {
+    /// Input event node, for example /dev/input/event8.
+    #[arg(long)]
+    device: PathBuf,
+    /// Emit one JSON object per raw event.
+    #[arg(long)]
+    json: bool,
+    /// Stop after this many events. Zero means unlimited.
+    #[arg(long, default_value_t = 0)]
+    limit: usize,
+    /// Stop when no event arrives for this many seconds. Zero disables it.
+    #[arg(long, default_value_t = 10)]
+    idle_timeout: u64,
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     match Cli::parse().command {
         Command::Validate(args) => validate(args),
         Command::Inspect(args) => inspect(args),
         Command::Simulate(args) => simulate(args).await,
+        Command::Devices(args) => devices(args),
+        Command::Monitor(args) => monitor(args).await,
     }
 }
 
@@ -117,6 +150,97 @@ async fn simulate(args: SimulateArgs) -> Result<()> {
     let mut response = String::new();
     BufReader::new(stream).read_line(&mut response).await?;
     print!("{response}");
+    Ok(())
+}
+
+fn devices(args: DevicesArgs) -> Result<()> {
+    let devices: Vec<DeviceInfo> = enumerate_devices()
+        .into_iter()
+        .filter(|device| !args.touchpads_only || device.is_touchpad_candidate())
+        .collect();
+
+    if args.json {
+        println!("{}", serde_json::to_string_pretty(&devices)?);
+        return Ok(());
+    }
+
+    if devices.is_empty() {
+        println!("no readable input devices found");
+        println!("check membership of the input group and /dev/input permissions");
+        return Ok(());
+    }
+
+    for device in devices {
+        println!(
+            "{}\t{:?}\t{}",
+            device.path.display(),
+            device.class,
+            device.name
+        );
+        println!(
+            "  multitouch={} pointer={} direct={} buttonpad={} abs={} rel={}",
+            device.capabilities.multitouch_positions,
+            device.capabilities.pointer_property,
+            device.capabilities.direct_property,
+            device.capabilities.buttonpad_property,
+            device.capabilities.absolute_axes,
+            device.capabilities.relative_axes,
+        );
+    }
+    Ok(())
+}
+
+async fn monitor(args: MonitorArgs) -> Result<()> {
+    let mut observer = EvdevObserver::open(&args.device)?;
+    eprintln!(
+        "observing {} ({}) in read-only mode; the device is not grabbed",
+        observer.info().path.display(),
+        observer.info().name
+    );
+
+    let mut count = 0usize;
+    loop {
+        if args.limit > 0 && count >= args.limit {
+            break;
+        }
+
+        let next = if args.idle_timeout == 0 {
+            tokio::select! {
+                result = observer.next_event() => Some(result),
+                _ = tokio::signal::ctrl_c() => None,
+            }
+        } else {
+            tokio::select! {
+                result = tokio::time::timeout(
+                    Duration::from_secs(args.idle_timeout),
+                    observer.next_event(),
+                ) => match result {
+                    Ok(event) => Some(event),
+                    Err(_) => {
+                        eprintln!("idle timeout reached; no input event was received");
+                        None
+                    }
+                },
+                _ = tokio::signal::ctrl_c() => None,
+            }
+        };
+
+        let Some(event) = next else {
+            break;
+        };
+        let event = event?;
+        count += 1;
+
+        if args.json {
+            println!("{}", serde_json::to_string(&event)?);
+        } else {
+            println!(
+                "{:>5} {:<24} code={:<4} value={:<8} {}",
+                count, event.event_type, event.code, event.value, event.summary
+            );
+        }
+    }
+
     Ok(())
 }
 

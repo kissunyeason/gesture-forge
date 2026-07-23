@@ -15,5 +15,6 @@ anyhow.workspace = true
 clap.workspace = true
 gesture-actions = { path = "../gesture-actions" }
 gesture-core = { path = "../gesture-core" }
+gesture-device = { path = "../gesture-device" }
 serde_json.workspace = true
 tokio.workspace = true

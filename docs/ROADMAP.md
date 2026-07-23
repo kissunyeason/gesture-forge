@@ -9,7 +9,8 @@
 
 ## Milestone 1 - touchpad proxy
 
-- evdev discovery and device selection;
+- [x] read-only evdev discovery and device selection;
+- [x] raw diagnostic observer with JSON Lines output;
 - uinput clone and fail-open cleanup;
 - raw multitouch frame recorder/replayer;
 - swipe, tap, hold, drag, pinch, and rotate recognizers;
