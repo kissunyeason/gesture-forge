@@ -47,6 +47,7 @@ cargo run -p gesture-cli -- record \
   --device /dev/input/event8 \
   --output touchpad.jsonl \
   --exclusive \
+  --exclusive-timeout 120 \
   --idle-timeout 15
 
 cargo run -p gesture-cli -- replay \
@@ -61,7 +62,10 @@ same tracker as live input, allowing deterministic tests without hardware.
 duration of the recording. Other clients, including the desktop compositor, do
 not receive those events, so workspace and overview gestures are not triggered.
 The grab is tied to the open device file and is released when the recorder exits.
-Without this option, recording remains shared and desktop gestures may run.
+GestureForge additionally performs an explicit ungrab before shutdown work,
+handles interrupt/termination/hangup signals, watches the launching terminal,
+and applies a bounded total grab duration. Without this option, recording
+remains shared and desktop gestures may run.
 
 Touch frames are not gestures and do not contain actions. The independent
 `gesture-recognition` crate now consumes them for v0.4 swipe and hold events.

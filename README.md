@@ -29,7 +29,10 @@ explicit testing. Recognition itself remains action-agnostic.
 
 Shared observation remains non-grabbing. Recording and live recognition can opt
 into a temporary `EVIOCGRAB` so GNOME and other clients do not receive test
-gestures. The optional uinput provider creates a virtual pointer only when
+gestures. Exclusive CLI sessions now explicitly ungrab before shutdown cleanup,
+watch `SIGINT`, `SIGTERM`, and terminal hangup, stop when their launching
+terminal process disappears, and enforce a 120-second total grab limit by
+default. The optional uinput provider creates a virtual pointer only when
 explicitly enabled and first executed. Full hardware proxying, passthrough,
 tap, pinch, and rotation remain later milestones.
 
@@ -138,14 +141,21 @@ cargo run -p gesture-cli -- frames --device /dev/input/event8 --json
 cargo run -p gesture-cli -- record \
   --device /dev/input/event8 \
   --output sample.jsonl \
-  --exclusive
+  --exclusive \
+  --exclusive-timeout 120
 cargo run -p gesture-cli -- replay --input sample.jsonl --json
 cargo run -p gesture-cli -- recognize --input sample.jsonl --json
-cargo run -p gesture-cli -- gestures --device /dev/input/event8 --exclusive
+cargo run -p gesture-cli -- gestures \
+  --device /dev/input/event8 \
+  --exclusive \
+  --exclusive-timeout 120
 # With a running daemon, append --dispatch to execute configured actions.
 ```
 
 `monitor` and `frames` never grab the device. `record` is shared by default;
 add `--exclusive` (alias `--grab`) when collecting gesture samples so desktop
-gestures are temporarily blocked. The grab ends when the recorder exits. See
+gestures are temporarily blocked. The grab ends on normal return, `Ctrl+C`,
+`SIGTERM`, terminal hangup, launching-process exit, the exclusive timeout, or
+process drop. If a test terminal is lost, `pkill -TERM -x gesture-forge` remains
+the manual recovery command. See
 [the observer documentation](docs/DEVICE_OBSERVER.md).

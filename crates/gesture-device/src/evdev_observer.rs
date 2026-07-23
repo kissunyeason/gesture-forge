@@ -138,6 +138,27 @@ impl EvdevObserver {
         self.exclusive
     }
 
+    /// Release a previously acquired `EVIOCGRAB` immediately.
+    ///
+    /// Dropping the underlying file descriptor also releases the kernel grab,
+    /// but callers should use this method before performing any potentially
+    /// blocking shutdown work so the desktop regains the physical device as
+    /// early as possible.
+    pub fn release_grab(&mut self) -> Result<()> {
+        if !self.exclusive {
+            return Ok(());
+        }
+
+        self.stream.device_mut().ungrab().with_context(|| {
+            format!(
+                "failed to release exclusive grab on {}",
+                self.info.path.display()
+            )
+        })?;
+        self.exclusive = false;
+        Ok(())
+    }
+
     pub async fn next_event(&mut self) -> Result<RawInputEvent> {
         let event =
             self.stream.next_event().await.with_context(|| {
@@ -157,6 +178,15 @@ impl EvdevObserver {
             value: event.value(),
             summary: format!("{:?}", event.destructure()),
         })
+    }
+}
+
+impl Drop for EvdevObserver {
+    fn drop(&mut self) {
+        if self.exclusive {
+            let _ = self.stream.device_mut().ungrab();
+            self.exclusive = false;
+        }
     }
 }
 

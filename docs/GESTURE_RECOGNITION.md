@@ -96,11 +96,16 @@ Or inspect live recognition:
 cargo run -p gesture-cli -- gestures \
   --device /dev/input/event8 \
   --exclusive \
+  --exclusive-timeout 120 \
   --recognizer-config ~/.config/gesture-forge/recognizer.toml
 ```
 
 `gestures` is shared by default. `--exclusive` temporarily blocks other clients
-from receiving touchpad events and is intended for controlled testing.
+from receiving touchpad events and is intended for controlled testing. While it
+is active, ordinary one- and two-finger desktop input is also blocked because
+GestureForge does not yet proxy unmatched hardware events. A guarded exclusive
+session ends on `SIGINT`, `SIGTERM`, terminal hangup, launching-process exit, or
+the total `--exclusive-timeout` (120 seconds by default).
 
 Add `--dispatch` (and optionally `--socket PATH`) to forward each recognized
 event to a running daemon. The daemon remains responsible for configuration,
@@ -108,6 +113,10 @@ security checks, and action execution. The CLI treats unsuccessful action
 outcomes as errors instead of accepting any syntactically valid daemon reply.
 For pointer-drag testing, combine `--dispatch` with `--exclusive` so the desktop
 does not process the physical gesture at the same time.
+
+The physical grab is released before socket-based drag cancellation is sent.
+Daemon acknowledgements also have a short timeout, so an unresponsive daemon
+cannot keep the physical touchpad grabbed indefinitely.
 
 The generic rule syntax is:
 

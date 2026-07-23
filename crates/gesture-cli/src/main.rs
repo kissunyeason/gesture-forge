@@ -1,9 +1,10 @@
 use std::{
     collections::BTreeMap,
-    env,
+    env, fmt,
     fs::File as StdFile,
-    io::{BufRead, BufReader as StdBufReader},
+    io::{BufRead, BufReader as StdBufReader, IsTerminal},
     path::{Path, PathBuf},
+    process,
     time::Duration,
 };
 
@@ -18,7 +19,13 @@ use gesture_recognition::{GestureRecognizer, RecognizerConfig};
 use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
     net::UnixStream,
+    signal::unix::{signal, Signal, SignalKind},
+    time::{Instant, Interval, MissedTickBehavior},
 };
+
+const DEFAULT_EXCLUSIVE_TIMEOUT_SECONDS: u64 = 120;
+const PARENT_CHECK_INTERVAL: Duration = Duration::from_millis(250);
+const DISPATCH_TIMEOUT: Duration = Duration::from_secs(2);
 
 #[derive(Debug, Parser)]
 #[command(
@@ -134,6 +141,9 @@ struct RecordArgs {
     /// Temporarily grab the device so desktop gestures do not run while recording.
     #[arg(long, visible_alias = "grab")]
     exclusive: bool,
+    /// Maximum total seconds to hold an exclusive grab.
+    #[arg(long, default_value_t = DEFAULT_EXCLUSIVE_TIMEOUT_SECONDS)]
+    exclusive_timeout: u64,
     /// Destination JSON Lines file.
     #[arg(long)]
     output: PathBuf,
@@ -166,6 +176,9 @@ struct GesturesArgs {
     /// Temporarily grab the device while recognizing gestures.
     #[arg(long, visible_alias = "grab")]
     exclusive: bool,
+    /// Maximum total seconds to hold an exclusive grab.
+    #[arg(long, default_value_t = DEFAULT_EXCLUSIVE_TIMEOUT_SECONDS)]
+    exclusive_timeout: u64,
     /// Optional recognizer TOML. Built-in compatible defaults are used when omitted.
     #[arg(long, env = "GESTURE_FORGE_RECOGNIZER_CONFIG")]
     recognizer_config: Option<PathBuf>,
@@ -317,6 +330,7 @@ fn devices(args: DevicesArgs) -> Result<()> {
 }
 
 async fn monitor(args: MonitorArgs) -> Result<()> {
+    let mut shutdown = ShutdownMonitor::new(false, 0)?;
     let mut observer = EvdevObserver::open(&args.device)?;
     eprintln!(
         "observing {} ({}) in read-only mode; the device is not grabbed",
@@ -330,7 +344,8 @@ async fn monitor(args: MonitorArgs) -> Result<()> {
             break;
         }
 
-        let Some(event) = next_raw_event(&mut observer, args.idle_timeout).await? else {
+        let Some(event) = next_raw_event(&mut observer, args.idle_timeout, &mut shutdown).await?
+        else {
             break;
         };
         count += 1;
@@ -349,6 +364,7 @@ async fn monitor(args: MonitorArgs) -> Result<()> {
 }
 
 async fn frames(args: FramesArgs) -> Result<()> {
+    let mut shutdown = ShutdownMonitor::new(false, 0)?;
     let mut observer = EvdevObserver::open(&args.device)?;
     let mut tracker = TouchFrameTracker::new();
     let mut count = 0usize;
@@ -364,7 +380,8 @@ async fn frames(args: FramesArgs) -> Result<()> {
             break;
         }
 
-        let Some(event) = next_raw_event(&mut observer, args.idle_timeout).await? else {
+        let Some(event) = next_raw_event(&mut observer, args.idle_timeout, &mut shutdown).await?
+        else {
             break;
         };
 
@@ -378,14 +395,16 @@ async fn frames(args: FramesArgs) -> Result<()> {
 }
 
 async fn record(args: RecordArgs) -> Result<()> {
+    validate_exclusive_timeout(args.exclusive, args.exclusive_timeout)?;
+    let mut output = tokio::fs::File::create(&args.output)
+        .await
+        .with_context(|| format!("failed to create recording {}", args.output.display()))?;
+    let mut shutdown = ShutdownMonitor::new(args.exclusive, args.exclusive_timeout)?;
     let mut observer = if args.exclusive {
         EvdevObserver::open_exclusive(&args.device)?
     } else {
         EvdevObserver::open(&args.device)?
     };
-    let mut output = tokio::fs::File::create(&args.output)
-        .await
-        .with_context(|| format!("failed to create recording {}", args.output.display()))?;
     let mut count = 0usize;
 
     let delivery_mode = if observer.is_exclusive() {
@@ -401,32 +420,52 @@ async fn record(args: RecordArgs) -> Result<()> {
         args.output.display(),
         delivery_mode
     );
+    print_exclusive_safety(&observer, args.exclusive_timeout);
 
-    loop {
-        if args.limit > 0 && count >= args.limit {
-            break;
+    let run_result: Result<()> = async {
+        loop {
+            if args.limit > 0 && count >= args.limit {
+                break;
+            }
+
+            let Some(event) =
+                next_raw_event(&mut observer, args.idle_timeout, &mut shutdown).await?
+            else {
+                break;
+            };
+
+            output.write_all(&serde_json::to_vec(&event)?).await?;
+            output.write_all(b"\n").await?;
+            count += 1;
         }
-
-        let Some(event) = next_raw_event(&mut observer, args.idle_timeout).await? else {
-            break;
-        };
-
-        output.write_all(&serde_json::to_vec(&event)?).await?;
-        output.write_all(b"\n").await?;
-        count += 1;
+        Ok(())
     }
+    .await;
 
-    output.flush().await?;
-    eprintln!("recorded {count} raw events to {}", args.output.display());
-    Ok(())
+    let release_result = observer.release_grab();
+    let finalize_result: Result<()> = async {
+        output.flush().await?;
+        eprintln!("recorded {count} raw events to {}", args.output.display());
+        Ok(())
+    }
+    .await;
+
+    let result = finish_with_secondary(
+        run_result,
+        release_result,
+        "raw event recording",
+        "exclusive grab release",
+    );
+    finish_with_secondary(
+        result,
+        finalize_result,
+        "raw event recording",
+        "output finalization",
+    )
 }
 
 async fn gestures(args: GesturesArgs) -> Result<()> {
-    let mut observer = if args.exclusive {
-        EvdevObserver::open_exclusive(&args.device)?
-    } else {
-        EvdevObserver::open(&args.device)?
-    };
+    validate_exclusive_timeout(args.exclusive, args.exclusive_timeout)?;
     let config = load_recognizer_config(args.recognizer_config.as_deref())?;
     let mut tracker = TouchFrameTracker::new();
     let mut recognizer = GestureRecognizer::new(config)?;
@@ -434,6 +473,12 @@ async fn gestures(args: GesturesArgs) -> Result<()> {
         Some(DispatchClient::connect(&args.socket).await?)
     } else {
         None
+    };
+    let mut shutdown = ShutdownMonitor::new(args.exclusive, args.exclusive_timeout)?;
+    let mut observer = if args.exclusive {
+        EvdevObserver::open_exclusive(&args.device)?
+    } else {
+        EvdevObserver::open(&args.device)?
     };
     let mut count = 0usize;
 
@@ -448,6 +493,7 @@ async fn gestures(args: GesturesArgs) -> Result<()> {
         observer.info().name,
         delivery_mode
     );
+    print_exclusive_safety(&observer, args.exclusive_timeout);
 
     let run_result: Result<()> = async {
         loop {
@@ -455,7 +501,9 @@ async fn gestures(args: GesturesArgs) -> Result<()> {
                 break;
             }
 
-            let Some(raw_event) = next_raw_event(&mut observer, args.idle_timeout).await? else {
+            let Some(raw_event) =
+                next_raw_event(&mut observer, args.idle_timeout, &mut shutdown).await?
+            else {
                 break;
             };
 
@@ -475,6 +523,10 @@ async fn gestures(args: GesturesArgs) -> Result<()> {
     }
     .await;
 
+    // Restore the physical touchpad before any socket-based drag cleanup can
+    // block. Drop will retry if this explicit release fails.
+    let release_result = observer.release_grab();
+
     let cleanup_result: Result<()> = async {
         for event in recognizer.cancel() {
             deliver_gesture(&event, args.json, dispatcher.as_mut()).await?;
@@ -483,7 +535,18 @@ async fn gestures(args: GesturesArgs) -> Result<()> {
     }
     .await;
 
-    finish_with_cleanup(run_result, cleanup_result, "live gesture recognition")
+    let result = finish_with_secondary(
+        run_result,
+        release_result,
+        "live gesture recognition",
+        "exclusive grab release",
+    );
+    finish_with_secondary(
+        result,
+        cleanup_result,
+        "live gesture recognition",
+        "drag cleanup",
+    )
 }
 
 async fn deliver_gesture(
@@ -515,6 +578,19 @@ impl DispatchClient {
     }
 
     async fn send(&mut self, event: &InputEvent) -> Result<()> {
+        tokio::time::timeout(DISPATCH_TIMEOUT, self.send_inner(event))
+            .await
+            .with_context(|| {
+                format!(
+                    "daemon did not acknowledge {} {} within {} seconds",
+                    event.family,
+                    event.phase,
+                    DISPATCH_TIMEOUT.as_secs()
+                )
+            })?
+    }
+
+    async fn send_inner(&mut self, event: &InputEvent) -> Result<()> {
         self.writer.write_all(&serde_json::to_vec(event)?).await?;
         self.writer.write_all(b"\n").await?;
         self.writer.flush().await?;
@@ -577,17 +653,18 @@ fn dispatch_failure(report: &DispatchReport) -> Option<String> {
     })
 }
 
-fn finish_with_cleanup(
-    run_result: Result<()>,
-    cleanup_result: Result<()>,
+fn finish_with_secondary(
+    primary_result: Result<()>,
+    secondary_result: Result<()>,
     operation: &str,
+    secondary_name: &str,
 ) -> Result<()> {
-    match (run_result, cleanup_result) {
-        (Err(error), Err(cleanup_error)) => Err(error).context(format!(
-            "{operation} failed; drag cleanup also failed: {cleanup_error}"
+    match (primary_result, secondary_result) {
+        (Err(error), Err(secondary_error)) => Err(error).context(format!(
+            "{operation} failed; {secondary_name} also failed: {secondary_error}"
         )),
         (Err(error), Ok(())) => Err(error),
-        (Ok(()), Err(error)) => Err(error).context(format!("{operation} cleanup failed")),
+        (Ok(()), Err(error)) => Err(error).context(format!("{operation} {secondary_name} failed")),
         (Ok(()), Ok(())) => Ok(()),
     }
 }
@@ -688,7 +765,12 @@ fn recognize(args: RecognizeArgs) -> Result<()> {
         Ok(())
     })();
 
-    finish_with_cleanup(run_result, cleanup_result, "offline gesture recognition")
+    finish_with_secondary(
+        run_result,
+        cleanup_result,
+        "offline gesture recognition",
+        "drag cleanup",
+    )
 }
 
 fn load_recognizer_config(path: Option<&Path>) -> Result<RecognizerConfig> {
@@ -753,17 +835,153 @@ fn print_gesture(event: &InputEvent, json: bool) -> Result<()> {
     Ok(())
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ShutdownReason {
+    Interrupt,
+    Terminate,
+    Hangup,
+    ParentExited,
+    ParentUnavailable,
+    ExclusiveTimeout,
+}
+
+impl fmt::Display for ShutdownReason {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::Interrupt => "SIGINT received",
+            Self::Terminate => "SIGTERM received",
+            Self::Hangup => "terminal hangup received",
+            Self::ParentExited => "launching process exited",
+            Self::ParentUnavailable => "launching process could no longer be inspected",
+            Self::ExclusiveTimeout => "exclusive-grab safety timeout reached",
+        })
+    }
+}
+
+struct ShutdownMonitor {
+    interrupt: Signal,
+    terminate: Signal,
+    hangup: Signal,
+    parent_pid: Option<u32>,
+    parent_check: Interval,
+    exclusive_deadline: Option<Instant>,
+}
+
+impl ShutdownMonitor {
+    fn new(exclusive: bool, exclusive_timeout: u64) -> Result<Self> {
+        let interrupt = signal(SignalKind::interrupt()).context("failed to watch SIGINT")?;
+        let terminate = signal(SignalKind::terminate()).context("failed to watch SIGTERM")?;
+        let hangup = signal(SignalKind::hangup()).context("failed to watch SIGHUP")?;
+        let parent_pid = if exclusive && stdio_is_terminal() {
+            Some(read_parent_pid()?)
+        } else {
+            None
+        };
+        let mut parent_check = tokio::time::interval(PARENT_CHECK_INTERVAL);
+        parent_check.set_missed_tick_behavior(MissedTickBehavior::Delay);
+        let exclusive_deadline =
+            exclusive.then(|| Instant::now() + Duration::from_secs(exclusive_timeout));
+
+        Ok(Self {
+            interrupt,
+            terminate,
+            hangup,
+            parent_pid,
+            parent_check,
+            exclusive_deadline,
+        })
+    }
+
+    async fn wait(&mut self) -> ShutdownReason {
+        let expected_parent = self.parent_pid;
+        let has_deadline = self.exclusive_deadline.is_some();
+        let deadline = self
+            .exclusive_deadline
+            .unwrap_or_else(|| Instant::now() + Duration::from_secs(24 * 60 * 60));
+
+        loop {
+            tokio::select! {
+                biased;
+                _ = self.interrupt.recv() => return ShutdownReason::Interrupt,
+                _ = self.terminate.recv() => return ShutdownReason::Terminate,
+                _ = self.hangup.recv() => return ShutdownReason::Hangup,
+                _ = tokio::time::sleep_until(deadline), if has_deadline => {
+                    return ShutdownReason::ExclusiveTimeout;
+                }
+                _ = self.parent_check.tick(), if expected_parent.is_some() => {
+                    match read_parent_pid() {
+                        Ok(current_parent) if Some(current_parent) != expected_parent => {
+                            return ShutdownReason::ParentExited;
+                        }
+                        Err(_) => return ShutdownReason::ParentUnavailable,
+                        Ok(_) => {}
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn validate_exclusive_timeout(exclusive: bool, timeout: u64) -> Result<()> {
+    if exclusive && !(1..=3600).contains(&timeout) {
+        anyhow::bail!("--exclusive-timeout must be between 1 and 3600 seconds");
+    }
+    Ok(())
+}
+
+fn print_exclusive_safety(observer: &EvdevObserver, timeout: u64) {
+    if !observer.is_exclusive() {
+        return;
+    }
+
+    eprintln!(
+        "exclusive safety: pid={} timeout={}s; SIGINT, SIGTERM, SIGHUP, parent exit, timeout, and Drop all release the grab",
+        process::id(),
+        timeout
+    );
+}
+
+fn stdio_is_terminal() -> bool {
+    std::io::stdin().is_terminal()
+        || std::io::stdout().is_terminal()
+        || std::io::stderr().is_terminal()
+}
+
+fn read_parent_pid() -> Result<u32> {
+    let status = std::fs::read_to_string("/proc/self/status")
+        .context("failed to inspect /proc/self/status for exclusive-grab watchdog")?;
+    parse_parent_pid(&status).context("/proc/self/status did not contain a valid PPid entry")
+}
+
+fn parse_parent_pid(status: &str) -> Option<u32> {
+    status.lines().find_map(|line| {
+        line.strip_prefix("PPid:")
+            .and_then(|value| value.trim().parse().ok())
+            .filter(|pid| *pid > 0)
+    })
+}
+
 async fn next_raw_event(
     observer: &mut EvdevObserver,
     idle_timeout: u64,
+    shutdown: &mut ShutdownMonitor,
 ) -> Result<Option<RawInputEvent>> {
     if idle_timeout == 0 {
         tokio::select! {
+            biased;
+            reason = shutdown.wait() => {
+                eprintln!("stopping input capture: {reason}");
+                Ok(None)
+            }
             result = observer.next_event() => result.map(Some),
-            _ = tokio::signal::ctrl_c() => Ok(None),
         }
     } else {
         tokio::select! {
+            biased;
+            reason = shutdown.wait() => {
+                eprintln!("stopping input capture: {reason}");
+                Ok(None)
+            }
             result = tokio::time::timeout(
                 Duration::from_secs(idle_timeout),
                 observer.next_event(),
@@ -774,7 +992,6 @@ async fn next_raw_event(
                     Ok(None)
                 }
             },
-            _ = tokio::signal::ctrl_c() => Ok(None),
         }
     }
 }
@@ -891,5 +1108,22 @@ mod tests {
         };
         let error = validate_dispatch_report(&event, &report).unwrap_err();
         assert!(error.to_string().contains("does not match"));
+    }
+
+    #[test]
+    fn parses_parent_pid_from_proc_status() {
+        let status = "Name:\tgesture-forge\nState:\tS (sleeping)\nPPid:\t4321\n";
+        assert_eq!(parse_parent_pid(status), Some(4321));
+        assert_eq!(parse_parent_pid("PPid:\t0\n"), None);
+        assert_eq!(parse_parent_pid("Name:\ttest\n"), None);
+    }
+
+    #[test]
+    fn validates_exclusive_grab_timeout() {
+        validate_exclusive_timeout(false, 0).unwrap();
+        validate_exclusive_timeout(true, 1).unwrap();
+        validate_exclusive_timeout(true, 3600).unwrap();
+        assert!(validate_exclusive_timeout(true, 0).is_err());
+        assert!(validate_exclusive_timeout(true, 3601).is_err());
     }
 }

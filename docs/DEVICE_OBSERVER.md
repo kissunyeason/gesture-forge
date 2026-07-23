@@ -52,8 +52,20 @@ would interfere with sampling, use:
 cargo run -p gesture-cli -- record \
   --device /dev/input/event8 \
   --output sample.jsonl \
-  --exclusive
+  --exclusive \
+  --exclusive-timeout 120
 ```
 
 The `--exclusive` option is deliberately opt-in. It calls `EVIOCGRAB` only for
-the lifetime of the recorder process. See [TOUCH_FRAMES.md](TOUCH_FRAMES.md).
+the guarded lifetime of the recorder process. GestureForge explicitly ungrabs
+before flushing or dispatch cleanup, listens for `SIGINT`, `SIGTERM`, and
+`SIGHUP`, watches the launching terminal process, and enforces a total exclusive
+timeout. The default is 120 seconds and accepted values are 1 through 3600.
+
+If a development process must be stopped from another terminal, use:
+
+```bash
+pkill -TERM -x gesture-forge
+```
+
+See [TOUCH_FRAMES.md](TOUCH_FRAMES.md).
