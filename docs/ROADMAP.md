@@ -14,7 +14,10 @@
 - uinput clone and fail-open cleanup;
 - [x] raw multitouch frame recorder/replayer;
 - [x] configurable three-finger swipe and hold recognizers;
-- tap, drag, pinch, and rotate recognizers;
+- [x] backward-compatible generic N-finger swipe and hold rule lists;
+- [x] continuous hold-then-drag recognition lifecycle;
+- tap, pinch, and rotate recognizers;
+- fail-safe uinput keyboard and pointer provider;
 - passthrough policy for unclaimed events.
 
 ## Milestone 2 - useful actions and context

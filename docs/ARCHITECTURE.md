@@ -50,10 +50,16 @@ The hardware proxy will:
 
 Record/replay fixtures will make recognizer changes testable without hardware.
 
-## v0.4 recognizer boundary
+## Recognizer boundary
 
 `gesture-recognition` consumes only `TouchFrame` values and publishes only
 `InputEvent` values. It does not import action providers or desktop adapters.
-The first recognizers classify completed three-finger sessions as cardinal
-swipes or stationary holds using configurable distance, velocity, duration,
-and direction-tolerance thresholds.
+Swipe and hold rules are generic over finger count and may be enabled
+simultaneously. Each completed event carries the matching rule ID as a label.
+Recognition uses effective, tracked, reported, and completely tracked finger
+state without treating a device-reported count as additional coordinates.
+
+Continuous drag rules publish `touchpad.drag` begin, update, end, and cancel
+events after a stable hold followed by intentional movement. They still do not
+press buttons, move pointers, or manipulate windows. Those effects belong to
+independent action providers with fail-safe release handling.

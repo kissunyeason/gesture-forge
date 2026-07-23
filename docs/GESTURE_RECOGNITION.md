@@ -1,7 +1,9 @@
 # Gesture recognition
 
-GestureForge 0.4 adds an action-agnostic recognizer between normalized touch
-frames and the core event matcher.
+GestureForge provides an action-agnostic recognizer between normalized touch
+frames and the core event matcher. Version 0.4.1 allows multiple swipe and hold
+rules with arbitrary finger counts to run simultaneously. Version 0.5.0 adds an
+opt-in continuous hold-then-drag lifecycle.
 
 ```text
 evdev raw events -> touch frames -> gesture recognizer -> InputEvent
@@ -11,9 +13,9 @@ The recognizer does not know about GNOME workspaces, mouse buttons, commands,
 or any other action. It emits the same stable `InputEvent` schema used by the
 daemon and simulation CLI.
 
-## v0.4 events
+## Events
 
-A completed three-finger swipe emits:
+A completed swipe emits:
 
 ```json
 {
@@ -39,6 +41,10 @@ A stationary three-finger hold emits `touchpad.hold` with phase `end`.
 Classification happens when the entire touch session ends, so a partial motion
 does not trigger an irreversible action early.
 
+Events retain their effective finger count and include the stable matching rule
+identity in `labels["recognition.rule_id"]`. Recognition remains independent
+from bindings and actions.
+
 ## Recognition rules
 
 The swipe classifier combines all of these conditions:
@@ -54,9 +60,16 @@ metrics separated all 21 swipe samples from 15 negative samples in the v0.4
 development dataset. That is in-sample validation, not a universal accuracy
 claim.
 
-Finger-count transitions are excluded from metrics. If a session contains more
-than one stable segment with the configured finger count, the longest segment
-is classified.
+Finger-count and coordinate-contact transitions are excluded from metrics. If a
+session contains more than one stable segment with the configured finger count,
+the longest segment is classified. A rule with
+`require_complete_tracking = true` rejects frames where the device reports more
+fingers than it supplies complete coordinates for.
+
+All enabled swipe rules are evaluated first to preserve the v0.4 swipe-before-
+hold behavior. If multiple rules match, the longest stable segment wins,
+followed by sample count and declaration order. A completed touch session emits
+at most one event.
 
 ## Configuration
 
@@ -89,3 +102,80 @@ cargo run -p gesture-cli -- gestures \
 `gestures` is shared by default. `--exclusive` temporarily blocks other clients
 from receiving touchpad events and is intended for controlled testing until a
 fail-open uinput proxy exists.
+
+The generic rule syntax is:
+
+```toml
+[[recognition.swipes]]
+id = "three-finger-swipe"
+enabled = true
+fingers = 3
+min_distance = 200.0
+min_average_velocity = 400.0
+max_duration_ms = 900.0
+max_axis_deviation_degrees = 30.0
+require_complete_tracking = true
+
+[[recognition.holds]]
+id = "three-finger-hold"
+enabled = true
+fingers = 3
+min_duration_ms = 650.0
+max_net_distance = 30.0
+require_complete_tracking = false
+```
+
+Rule IDs must be unique across swipe and hold rules. New rules require explicit
+thresholds and a tracking policy, so adding a four- or five-finger rule cannot
+silently inherit the calibrated three-finger values.
+
+The v0.4 tables remain accepted and are migrated in memory:
+
+```toml
+[recognition.three_finger_swipe]
+min_distance = 250.0
+
+[recognition.three_finger_hold]
+enabled = false
+```
+
+A legacy table cannot be combined with the new list for the same gesture type.
+Legacy rules retain the v0.4 partial-coordinate behavior. The example and fresh
+built-in swipe rule require complete tracking. Only three-finger thresholds
+have real-sample calibration.
+
+## Continuous drag rules
+
+A drag rule first observes a stable hold. Reaching the hold duration arms the
+rule without consuming the session. Movement beyond `min_drag_distance` then
+activates the drag and emits:
+
+```text
+touchpad.drag phase=begin
+touchpad.drag phase=update
+touchpad.drag phase=update
+touchpad.drag phase=end
+```
+
+If finger count, coordinate membership, or required complete tracking changes
+after activation, the lifecycle ends with `phase=cancel`. Once activated, a
+drag owns that touch session and suppresses swipe/hold classification. If it is
+only armed and the user releases without moving, the ordinary hold rule remains
+eligible.
+
+```toml
+[[recognition.drags]]
+id = "three-finger-drag"
+enabled = false
+fingers = 3
+min_hold_duration_ms = 350.0
+max_hold_distance = 20.0
+min_drag_distance = 8.0
+require_complete_tracking = true
+```
+
+`begin` and `update` events expose `dx`, `dy`, `total_dx`, `total_dy`,
+`distance`, `path_length`, `duration_ms`, and `hold_duration_ms`. Drag rules are
+disabled by default and their example thresholds are not calibrated. The
+recognizer does not inject pointer movement or mouse buttons; consumers must
+also treat both `end` and `cancel` as mandatory release signals.

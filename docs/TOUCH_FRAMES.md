@@ -14,14 +14,21 @@ The tracker consumes:
 Each frame contains:
 
 - begin, update, or end phase;
-- effective and hardware-reported finger counts;
+- effective, tracked, and hardware-reported finger counts;
+- whether every effective finger has a complete tracked X/Y coordinate;
 - sorted active contacts and tracking IDs;
 - centroid of contacts with complete coordinates;
 - centroid displacement and velocity when the contact count is stable;
 - source timestamp and frame interval.
 
-Finger-count transitions intentionally reset displacement and velocity so that
-adding or removing a finger does not create a false motion spike.
+The effective count is the greater of active protocol-B contacts and the
+`BTN_TOOL_*TAP` count. `tracked_contacts` counts active tracking IDs, while
+`reported_fingers` preserves the device report. `tracking_complete` is true
+only when every effective finger has an active contact with complete X/Y.
+
+Finger-count transitions and changes to the coordinate-bearing tracking-ID set
+reset displacement and velocity. This prevents a newly available coordinate
+from shifting the centroid and creating a false motion spike.
 
 ## Live frames
 

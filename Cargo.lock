@@ -236,7 +236,7 @@ dependencies = [
 
 [[package]]
 name = "gesture-actions"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -249,7 +249,7 @@ dependencies = [
 
 [[package]]
 name = "gesture-cli"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -263,7 +263,7 @@ dependencies = [
 
 [[package]]
 name = "gesture-core"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -278,7 +278,7 @@ dependencies = [
 
 [[package]]
 name = "gesture-daemon"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -294,7 +294,7 @@ dependencies = [
 
 [[package]]
 name = "gesture-device"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -306,7 +306,7 @@ dependencies = [
 
 [[package]]
 name = "gesture-recognition"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "gesture-core",

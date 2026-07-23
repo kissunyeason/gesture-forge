@@ -9,14 +9,22 @@ A gesture never has a hard-coded action. Backends publish normalized events, bin
 
 ## Project status
 
-`0.4.0` is the first action-agnostic gesture recognition release. It includes the read-only observer, multitouch frames, and:
+`0.5.0` extends the action-agnostic recognizer with generic finger-count rules
+and an experimental continuous drag lifecycle. It includes the read-only
+observer, multitouch frames, and:
 
 - Linux evdev device discovery and non-grabbing observation;
 - protocol-B slot and tracking-ID parsing;
 - normalized contact frames with finger count, centroid, displacement, and velocity;
 - live frame inspection plus raw JSON Lines recording and offline replay;
-- configurable three-finger swipe and hold recognition at touch-session end;
+- simultaneous configurable N-finger swipe and hold rules at touch-session end;
+- opt-in N-finger hold-then-drag recognition with begin/update/end/cancel events;
 - live and offline recognition commands that emit standard `InputEvent` objects.
+
+Only the built-in three-finger swipe and hold thresholds have been calibrated
+against real samples. Four- and five-finger rules and drag thresholds require
+explicit testing. Drag recognition emits events only; it does not yet inject a
+mouse button or pointer motion.
 
 Shared observation remains non-grabbing. Recording and live recognition can opt
 into a temporary `EVIOCGRAB` so GNOME and other clients do not receive test

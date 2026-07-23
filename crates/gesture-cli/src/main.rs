@@ -166,7 +166,7 @@ struct GesturesArgs {
     /// Temporarily grab the device while recognizing gestures.
     #[arg(long, visible_alias = "grab")]
     exclusive: bool,
-    /// Optional recognizer TOML. Built-in v0.4 defaults are used when omitted.
+    /// Optional recognizer TOML. Built-in compatible defaults are used when omitted.
     #[arg(long, env = "GESTURE_FORGE_RECOGNIZER_CONFIG")]
     recognizer_config: Option<PathBuf>,
     /// Emit one JSON object per recognized gesture.
@@ -185,7 +185,7 @@ struct RecognizeArgs {
     /// JSON Lines file created by `gesture-forge record` or `monitor --json`.
     #[arg(long)]
     input: PathBuf,
-    /// Optional recognizer TOML. Built-in v0.4 defaults are used when omitted.
+    /// Optional recognizer TOML. Built-in compatible defaults are used when omitted.
     #[arg(long, env = "GESTURE_FORGE_RECOGNIZER_CONFIG")]
     recognizer_config: Option<PathBuf>,
     /// Emit one JSON object per recognized gesture.
@@ -579,10 +579,35 @@ fn print_gesture(event: &InputEvent, json: bool) -> Result<()> {
         .copied()
         .unwrap_or_default();
     let duration = event.values.get("duration_ms").copied().unwrap_or_default();
+    let rule_id = event
+        .labels
+        .get("recognition.rule_id")
+        .map(String::as_str)
+        .unwrap_or("-");
+
+    if event.family == "touchpad.drag" {
+        let dx = event.values.get("dx").copied().unwrap_or_default();
+        let dy = event.values.get("dy").copied().unwrap_or_default();
+        let total_dx = event.values.get("total_dx").copied().unwrap_or_default();
+        let total_dy = event.values.get("total_dy").copied().unwrap_or_default();
+        println!(
+            "{} phase={} rule={} fingers={} delta=({:+.1},{:+.1}) total=({:+.1},{:+.1}) duration={:.1}ms",
+            event.family,
+            event.phase,
+            rule_id,
+            fingers,
+            dx,
+            dy,
+            total_dx,
+            total_dy,
+            duration
+        );
+        return Ok(());
+    }
 
     println!(
-        "{} phase={} fingers={} direction={} distance={:.1} velocity={:.1}/s duration={:.1}ms",
-        event.family, event.phase, fingers, direction, distance, velocity, duration
+        "{} phase={} rule={} fingers={} direction={} distance={:.1} velocity={:.1}/s duration={:.1}ms",
+        event.family, event.phase, rule_id, fingers, direction, distance, velocity, duration
     );
     Ok(())
 }
@@ -633,12 +658,13 @@ fn print_frame(frame: &TouchFrame, json: bool) -> Result<()> {
         .unwrap_or_else(|| "-".to_owned());
 
     println!(
-        "{:>5} {:?} fingers={} tracked={} reported={:?} centroid={} delta={} velocity/s={}",
+        "{:>5} {:?} fingers={} tracked={} reported={:?} complete={} centroid={} delta={} velocity/s={}",
         frame.sequence,
         frame.phase,
         frame.fingers,
         frame.tracked_contacts,
         frame.reported_fingers,
+        frame.tracking_complete,
         centroid,
         delta,
         velocity

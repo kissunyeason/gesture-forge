@@ -4,6 +4,7 @@ mod config;
 mod session;
 
 pub use config::{
-    HoldRecognizerConfig, RecognitionSettings, RecognizerConfig, SwipeRecognizerConfig,
+    DragRuleConfig, HoldRecognizerConfig, HoldRuleConfig, RecognitionSettings, RecognizerConfig,
+    SwipeRecognizerConfig, SwipeRuleConfig,
 };
 pub use session::{GestureRecognizer, GestureSessionMetrics};

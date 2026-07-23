@@ -1,17 +1,33 @@
-# GestureForge v0.4 recognizer configuration.
-# These provisional defaults were validated against the bundled development
-# sample analysis but should remain user-configurable for other hardware.
+# GestureForge v0.4.1 recognizer configuration.
+# Only the three-finger thresholds below have been calibrated against real
+# samples. Add four- or five-finger rules only with explicitly tested values.
 
-[recognition.three_finger_swipe]
+[[recognition.swipes]]
+id = "three-finger-swipe"
 enabled = true
 fingers = 3
 min_distance = 200.0
 min_average_velocity = 400.0
 max_duration_ms = 900.0
 max_axis_deviation_degrees = 30.0
+require_complete_tracking = true
 
-[recognition.three_finger_hold]
+[[recognition.holds]]
+id = "three-finger-hold"
 enabled = true
 fingers = 3
 min_duration_ms = 650.0
 max_net_distance = 30.0
+require_complete_tracking = false
+
+# Experimental continuous drag recognition is disabled by default. The values
+# below are structural examples and have not been calibrated against real drag
+# samples. Recognition emits events only; it does not press a mouse button.
+[[recognition.drags]]
+id = "three-finger-drag"
+enabled = false
+fingers = 3
+min_hold_duration_ms = 350.0
+max_hold_distance = 20.0
+min_drag_distance = 8.0
+require_complete_tracking = true

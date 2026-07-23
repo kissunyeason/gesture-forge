@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.5.0 - continuous drag recognition foundation
+
+- add generic N-finger hold-then-drag rules;
+- emit action-agnostic `touchpad.drag` begin, update, end, and cancel events;
+- keep ordinary holds available until movement actually activates a drag;
+- suppress end-of-session swipe and hold output after a drag claims the session;
+- cancel active drags when finger count, coordinate membership, or required tracking changes;
+- leave pointer/button injection for the fail-safe uinput action stage.
+
+## 0.4.1 - generic finger-count rules
+
+- replace the fixed recognizer configuration with simultaneous swipe and hold rule lists;
+- give every rule a stable ID, explicit finger count, and tracking-completeness policy;
+- preserve v0.4 `three_finger_swipe` and `three_finger_hold` configuration compatibility;
+- distinguish effective, tracked, reported, and completely tracked finger state;
+- reset motion when the coordinate-bearing contact set changes;
+- expose the matching rule ID without coupling recognition to actions;
+- keep built-in calibrated thresholds limited to three-finger gestures.
+
 ## 0.4.0 - session gesture recognition
 
 - add an independent `gesture-recognition` crate;

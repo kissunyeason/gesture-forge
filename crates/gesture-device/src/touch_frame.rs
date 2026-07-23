@@ -47,9 +47,14 @@ pub struct TouchFrame {
     pub sequence: u64,
     pub timestamp_micros: Option<u128>,
     pub phase: TouchFramePhase,
+    /// Effective finger count: the greater of tracked and device-reported fingers.
     pub fingers: u8,
+    /// Active protocol-B contacts with tracking IDs, whether or not X/Y are known yet.
     pub tracked_contacts: usize,
     pub reported_fingers: Option<u8>,
+    /// True when every effective finger has an active contact with complete X/Y.
+    #[serde(default)]
+    pub tracking_complete: bool,
     pub contacts: Vec<TouchContact>,
     pub centroid: Option<TouchPoint>,
     pub delta: Option<TouchPoint>,
@@ -74,6 +79,7 @@ pub struct TouchFrameTracker {
     slots: BTreeMap<u16, SlotState>,
     tool_keys: [bool; 6],
     previous_fingers: u8,
+    previous_motion_contacts: Vec<(u16, i32)>,
     previous_centroid: Option<TouchPoint>,
     previous_timestamp_micros: Option<u128>,
     sequence: u64,
@@ -168,6 +174,9 @@ impl TouchFrameTracker {
         let fingers = usize::from(reported_fingers.unwrap_or_default())
             .max(tracked_contacts)
             .min(usize::from(u8::MAX)) as u8;
+        let motion_contacts = coordinate_contact_ids(&contacts);
+        let tracking_complete =
+            motion_contacts.len() == tracked_contacts && tracked_contacts == usize::from(fingers);
 
         if !self.dirty {
             return None;
@@ -182,13 +191,15 @@ impl TouchFrameTracker {
         };
 
         let centroid = centroid(&contacts);
-        let same_contact_count = fingers > 0 && fingers == self.previous_fingers;
-        let frame_interval_micros = if same_contact_count {
+        let same_motion_basis = fingers > 0
+            && fingers == self.previous_fingers
+            && motion_contacts == self.previous_motion_contacts;
+        let frame_interval_micros = if same_motion_basis {
             elapsed_micros(self.previous_timestamp_micros, timestamp_micros)
         } else {
             None
         };
-        let delta = if same_contact_count {
+        let delta = if same_motion_basis {
             point_delta(self.previous_centroid, centroid)
         } else {
             None
@@ -212,6 +223,7 @@ impl TouchFrameTracker {
             fingers,
             tracked_contacts,
             reported_fingers,
+            tracking_complete,
             contacts,
             centroid,
             delta,
@@ -220,6 +232,7 @@ impl TouchFrameTracker {
         };
 
         self.previous_fingers = fingers;
+        self.previous_motion_contacts = motion_contacts;
         self.previous_timestamp_micros = timestamp_micros;
         self.previous_centroid = if fingers == 0 { None } else { centroid };
         self.dirty = false;
@@ -251,6 +264,14 @@ fn centroid(contacts: &[TouchContact]) -> Option<TouchPoint> {
         x: points.iter().map(|point| point.0).sum::<f64>() / count,
         y: points.iter().map(|point| point.1).sum::<f64>() / count,
     })
+}
+
+fn coordinate_contact_ids(contacts: &[TouchContact]) -> Vec<(u16, i32)> {
+    contacts
+        .iter()
+        .filter(|contact| contact.x.is_some() && contact.y.is_some())
+        .map(|contact| (contact.slot, contact.tracking_id))
+        .collect()
 }
 
 fn point_delta(previous: Option<TouchPoint>, current: Option<TouchPoint>) -> Option<TouchPoint> {
@@ -351,6 +372,7 @@ mod tests {
         assert_eq!(frame.fingers, 3);
         assert_eq!(frame.tracked_contacts, 3);
         assert_eq!(frame.reported_fingers, Some(3));
+        assert!(frame.tracking_complete);
         assert_eq!(frame.contacts[0].slot, 0);
         assert_eq!(frame.contacts[2].slot, 2);
         assert_eq!(frame.centroid, Some(TouchPoint { x: 200.0, y: 200.0 }));
@@ -368,6 +390,7 @@ mod tests {
         let frame = tracker.push(&sync(1_000)).unwrap();
         assert_eq!(frame.fingers, 4);
         assert_eq!(frame.tracked_contacts, 4);
+        assert!(frame.tracking_complete);
         assert_eq!(frame.contacts[3].slot, 3);
         assert_eq!(frame.centroid, Some(TouchPoint { x: 150.0, y: 150.0 }));
     }
@@ -383,6 +406,40 @@ mod tests {
         assert_eq!(frame.fingers, 4);
         assert_eq!(frame.tracked_contacts, 2);
         assert_eq!(frame.reported_fingers, Some(4));
+        assert!(!frame.tracking_complete);
+    }
+
+    #[test]
+    fn incomplete_coordinates_are_not_complete_tracking() {
+        let mut tracker = TouchFrameTracker::new();
+        tracker.push(&absolute(1_000, ABS_MT_SLOT, 0));
+        tracker.push(&absolute(1_000, ABS_MT_TRACKING_ID, 60));
+        tracker.push(&absolute(1_000, ABS_MT_POSITION_X, 100));
+        tracker.push(&key(1_000, BTN_TOOL_FINGER, 1));
+
+        let frame = tracker.push(&sync(1_000)).unwrap();
+        assert_eq!(frame.tracked_contacts, 1);
+        assert!(!frame.tracking_complete);
+        assert_eq!(frame.centroid, None);
+    }
+
+    #[test]
+    fn resets_motion_when_coordinate_contact_membership_changes() {
+        let mut tracker = TouchFrameTracker::new();
+        begin_contact(&mut tracker, 1_000, 0, 70, 100, 100);
+        tracker.push(&key(1_000, BTN_TOOL_DOUBLETAP, 1));
+        tracker.push(&sync(1_000));
+
+        tracker.push(&absolute(2_000, ABS_MT_SLOT, 1));
+        tracker.push(&absolute(2_000, ABS_MT_TRACKING_ID, 71));
+        tracker.push(&absolute(2_000, ABS_MT_POSITION_X, 400));
+        tracker.push(&absolute(2_000, ABS_MT_POSITION_Y, 400));
+        let frame = tracker.push(&sync(2_000)).unwrap();
+
+        assert_eq!(frame.fingers, 2);
+        assert!(frame.tracking_complete);
+        assert_eq!(frame.delta, None);
+        assert_eq!(frame.velocity_per_second, None);
     }
 
     #[test]
