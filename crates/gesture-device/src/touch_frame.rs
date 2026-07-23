@@ -300,11 +300,7 @@ mod tests {
         y: i32,
     ) {
         tracker.push(&absolute(timestamp_micros, ABS_MT_SLOT, slot));
-        tracker.push(&absolute(
-            timestamp_micros,
-            ABS_MT_TRACKING_ID,
-            tracking_id,
-        ));
+        tracker.push(&absolute(timestamp_micros, ABS_MT_TRACKING_ID, tracking_id));
         tracker.push(&absolute(timestamp_micros, ABS_MT_POSITION_X, x));
         tracker.push(&absolute(timestamp_micros, ABS_MT_POSITION_Y, y));
     }

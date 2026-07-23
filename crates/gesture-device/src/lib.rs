@@ -16,9 +16,7 @@ pub use evdev_observer::{
     enumerate_devices, inspect_device, DeviceCapabilities, DeviceClass, DeviceInfo, EvdevObserver,
     RawInputEvent,
 };
-pub use touch_frame::{
-    TouchContact, TouchFrame, TouchFramePhase, TouchFrameTracker, TouchPoint,
-};
+pub use touch_frame::{TouchContact, TouchFrame, TouchFramePhase, TouchFrameTracker, TouchPoint};
 
 #[derive(Debug, Clone, Default)]
 pub struct BackendCapabilities {
