@@ -9,18 +9,16 @@ A gesture never has a hard-coded action. Backends publish normalized events, bin
 
 ## Project status
 
-`0.2.0` is the read-only observer release. It includes everything from the
-foundation release plus:
+`0.3.0` is the multitouch frame release. It includes the read-only observer plus:
 
-- Linux evdev device discovery;
-- touchpad/touchscreen/pointer candidate classification;
-- a non-grabbing raw event monitor;
-- JSON Lines output for future recording and replay tools.
+- Linux evdev device discovery and non-grabbing observation;
+- protocol-B slot and tracking-ID parsing;
+- normalized contact frames with finger count, centroid, displacement, and velocity;
+- live frame inspection plus raw JSON Lines recording and offline replay.
 
 It **does not grab the real touchpad**, create a virtual input device, or inject
 input. That is intentional: this version can run alongside the current setup
-while we identify the exact hardware event stream. Hardware proxying remains
-the next milestone.
+while we identify the exact hardware event stream. Hardware proxying and configurable gesture recognizers remain later milestones.
 
 ## Architecture
 
@@ -33,11 +31,11 @@ physical input -> backend -> normalized event -> matcher -> conditions
 
 - `gesture-core`: event schema, configuration, validation, matching, provider APIs.
 - `gesture-actions`: independently registered action providers.
-- `gesture-device`: interfaces for evdev/libinput/uinput and test backends.
+- `gesture-device`: evdev discovery, raw observation, protocol-B frame tracking, and backend interfaces.
 - `gesture-daemon`: configuration reload, event socket, dispatch.
-- `gesture-cli`: validate configs and inject simulated events.
+- `gesture-cli`: validate configs, inspect devices, record/replay input, and inject simulations.
 
-See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), [docs/CONFIGURATION.md](docs/CONFIGURATION.md), [docs/PLUGIN_API.md](docs/PLUGIN_API.md), [docs/PRIOR_ART.md](docs/PRIOR_ART.md), and [docs/ROADMAP.md](docs/ROADMAP.md).
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), [docs/TOUCH_FRAMES.md](docs/TOUCH_FRAMES.md), [docs/CONFIGURATION.md](docs/CONFIGURATION.md), [docs/PLUGIN_API.md](docs/PLUGIN_API.md), [docs/PRIOR_ART.md](docs/PRIOR_ART.md), and [docs/ROADMAP.md](docs/ROADMAP.md).
 
 ## Build
 
@@ -102,6 +100,9 @@ GPL-3.0-or-later. Contributions remain open source.
 ```bash
 cargo run -p gesture-cli -- devices --touchpads-only
 cargo run -p gesture-cli -- monitor --device /dev/input/event8 --idle-timeout 10
+cargo run -p gesture-cli -- frames --device /dev/input/event8 --json
+cargo run -p gesture-cli -- record --device /dev/input/event8 --output sample.jsonl
+cargo run -p gesture-cli -- replay --input sample.jsonl --json
 ```
 
 The monitor never grabs the device. See [the observer documentation](docs/DEVICE_OBSERVER.md).

@@ -35,3 +35,15 @@ observe its virtual touchpad instead. Discovery itself remains safe.
 Raw evdev events are diagnostic input, not configurable actions and not yet
 normalized gestures. Future recognizers will convert frames into namespaced
 `InputEvent` values. Action providers remain unaware of evdev details.
+
+## Build normalized frames
+
+```bash
+cargo run -p gesture-cli -- frames \
+  --device /dev/input/event8 \
+  --json
+```
+
+For deterministic diagnostics, use `record` to create raw JSON Lines and
+`replay` to run the same data through the frame tracker. See
+[TOUCH_FRAMES.md](TOUCH_FRAMES.md).

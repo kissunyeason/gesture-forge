@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.0 - multitouch frame tracker
+
+- add protocol-B slot and tracking-ID parsing;
+- emit normalized begin/update/end touch frames;
+- calculate contact count, centroid, displacement, frame interval, and velocity;
+- add live `frames`, raw `record`, and offline `replay` commands;
+- keep frame production independent from gesture recognition and actions.
+
+
 ## 0.2.0 - read-only device observer
 
 - add evdev device discovery and touchpad candidate classification;

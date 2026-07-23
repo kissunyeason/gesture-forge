@@ -5,6 +5,7 @@
 //! contracts in later milestones, keeping gestures independent from actions.
 
 mod evdev_observer;
+mod touch_frame;
 
 use anyhow::Result;
 use async_trait::async_trait;
@@ -14,6 +15,9 @@ use tokio::sync::mpsc;
 pub use evdev_observer::{
     enumerate_devices, inspect_device, DeviceCapabilities, DeviceClass, DeviceInfo, EvdevObserver,
     RawInputEvent,
+};
+pub use touch_frame::{
+    TouchContact, TouchFrame, TouchFramePhase, TouchFrameTracker, TouchPoint,
 };
 
 #[derive(Debug, Clone, Default)]

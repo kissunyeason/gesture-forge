@@ -1,0 +1,53 @@
+# Normalized multitouch frames
+
+GestureForge converts Linux multitouch protocol-B events into contact frames
+before any gesture is recognized.
+
+The tracker consumes:
+
+- `ABS_MT_SLOT` to select a contact slot;
+- `ABS_MT_TRACKING_ID` to begin and end a contact;
+- `ABS_MT_POSITION_X` and `ABS_MT_POSITION_Y` for contact positions;
+- `BTN_TOOL_*TAP` as a fallback finger count;
+- `SYN_REPORT` as the frame boundary.
+
+Each frame contains:
+
+- begin, update, or end phase;
+- effective and hardware-reported finger counts;
+- sorted active contacts and tracking IDs;
+- centroid of contacts with complete coordinates;
+- centroid displacement and velocity when the contact count is stable;
+- source timestamp and frame interval.
+
+Finger-count transitions intentionally reset displacement and velocity so that
+adding or removing a finger does not create a false motion spike.
+
+## Live frames
+
+```bash
+cargo run -p gesture-cli -- frames \
+  --device /dev/input/event8 \
+  --json
+```
+
+This is read-only and does not call `EVIOCGRAB`.
+
+## Recording and replay
+
+```bash
+cargo run -p gesture-cli -- record \
+  --device /dev/input/event8 \
+  --output touchpad.jsonl \
+  --idle-timeout 15
+
+cargo run -p gesture-cli -- replay \
+  --input touchpad.jsonl \
+  --json
+```
+
+A recording contains one serialized `RawInputEvent` per line. Replay uses the
+same tracker as live input, allowing deterministic tests without hardware.
+
+Touch frames are not gestures and do not contain actions. Swipe, drag, pinch,
+rotation, tap, and hold recognizers will consume these frames in later layers.

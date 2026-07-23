@@ -1,10 +1,19 @@
-use std::{collections::BTreeMap, env, path::PathBuf, time::Duration};
+use std::{
+    collections::BTreeMap,
+    env,
+    fs::File as StdFile,
+    io::{BufRead, BufReader as StdBufReader},
+    path::PathBuf,
+    time::Duration,
+};
 
 use anyhow::{Context, Result};
 use clap::{Args, Parser, Subcommand};
 use gesture_actions::{default_action_registry, default_condition_registry};
 use gesture_core::{Config, Engine, InputEvent};
-use gesture_device::{enumerate_devices, DeviceInfo, EvdevObserver};
+use gesture_device::{
+    enumerate_devices, DeviceInfo, EvdevObserver, RawInputEvent, TouchFrame, TouchFrameTracker,
+};
 use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
     net::UnixStream,
@@ -29,6 +38,12 @@ enum Command {
     Devices(DevicesArgs),
     /// Observe raw events from one device without grabbing it.
     Monitor(MonitorArgs),
+    /// Convert live protocol-B events into normalized touch frames.
+    Frames(FramesArgs),
+    /// Record raw evdev events as replayable JSON Lines.
+    Record(RecordArgs),
+    /// Replay a JSON Lines recording through the touch-frame tracker.
+    Replay(ReplayArgs),
 }
 
 #[derive(Debug, Args)]
@@ -87,6 +102,51 @@ struct MonitorArgs {
     idle_timeout: u64,
 }
 
+#[derive(Debug, Args)]
+struct FramesArgs {
+    /// Input event node, for example /dev/input/event8.
+    #[arg(long)]
+    device: PathBuf,
+    /// Emit one JSON object per normalized frame.
+    #[arg(long)]
+    json: bool,
+    /// Stop after this many normalized frames. Zero means unlimited.
+    #[arg(long, default_value_t = 0)]
+    limit: usize,
+    /// Stop when no raw event arrives for this many seconds. Zero disables it.
+    #[arg(long, default_value_t = 10)]
+    idle_timeout: u64,
+}
+
+#[derive(Debug, Args)]
+struct RecordArgs {
+    /// Input event node, for example /dev/input/event8.
+    #[arg(long)]
+    device: PathBuf,
+    /// Destination JSON Lines file.
+    #[arg(long)]
+    output: PathBuf,
+    /// Stop after this many raw events. Zero means unlimited.
+    #[arg(long, default_value_t = 0)]
+    limit: usize,
+    /// Stop when no event arrives for this many seconds. Zero disables it.
+    #[arg(long, default_value_t = 10)]
+    idle_timeout: u64,
+}
+
+#[derive(Debug, Args)]
+struct ReplayArgs {
+    /// JSON Lines file created by `gesture-forge record` or `monitor --json`.
+    #[arg(long)]
+    input: PathBuf,
+    /// Emit one JSON object per normalized frame.
+    #[arg(long)]
+    json: bool,
+    /// Stop after this many normalized frames. Zero means unlimited.
+    #[arg(long, default_value_t = 0)]
+    limit: usize,
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     match Cli::parse().command {
@@ -95,6 +155,9 @@ async fn main() -> Result<()> {
         Command::Simulate(args) => simulate(args).await,
         Command::Devices(args) => devices(args),
         Command::Monitor(args) => monitor(args).await,
+        Command::Frames(args) => frames(args).await,
+        Command::Record(args) => record(args).await,
+        Command::Replay(args) => replay(args),
     }
 }
 
@@ -208,31 +271,9 @@ async fn monitor(args: MonitorArgs) -> Result<()> {
             break;
         }
 
-        let next = if args.idle_timeout == 0 {
-            tokio::select! {
-                result = observer.next_event() => Some(result),
-                _ = tokio::signal::ctrl_c() => None,
-            }
-        } else {
-            tokio::select! {
-                result = tokio::time::timeout(
-                    Duration::from_secs(args.idle_timeout),
-                    observer.next_event(),
-                ) => match result {
-                    Ok(event) => Some(event),
-                    Err(_) => {
-                        eprintln!("idle timeout reached; no input event was received");
-                        None
-                    }
-                },
-                _ = tokio::signal::ctrl_c() => None,
-            }
-        };
-
-        let Some(event) = next else {
+        let Some(event) = next_raw_event(&mut observer, args.idle_timeout).await? else {
             break;
         };
-        let event = event?;
         count += 1;
 
         if args.json {
@@ -245,6 +286,167 @@ async fn monitor(args: MonitorArgs) -> Result<()> {
         }
     }
 
+    Ok(())
+}
+
+async fn frames(args: FramesArgs) -> Result<()> {
+    let mut observer = EvdevObserver::open(&args.device)?;
+    let mut tracker = TouchFrameTracker::new();
+    let mut count = 0usize;
+
+    eprintln!(
+        "building normalized frames from {} ({}); the device is not grabbed",
+        observer.info().path.display(),
+        observer.info().name
+    );
+
+    loop {
+        if args.limit > 0 && count >= args.limit {
+            break;
+        }
+
+        let Some(event) = next_raw_event(&mut observer, args.idle_timeout).await? else {
+            break;
+        };
+
+        if let Some(frame) = tracker.push(&event) {
+            count += 1;
+            print_frame(&frame, args.json)?;
+        }
+    }
+
+    Ok(())
+}
+
+async fn record(args: RecordArgs) -> Result<()> {
+    let mut observer = EvdevObserver::open(&args.device)?;
+    let mut output = tokio::fs::File::create(&args.output)
+        .await
+        .with_context(|| format!("failed to create recording {}", args.output.display()))?;
+    let mut count = 0usize;
+
+    eprintln!(
+        "recording raw events from {} ({}) to {} without grabbing the device",
+        observer.info().path.display(),
+        observer.info().name,
+        args.output.display()
+    );
+
+    loop {
+        if args.limit > 0 && count >= args.limit {
+            break;
+        }
+
+        let Some(event) = next_raw_event(&mut observer, args.idle_timeout).await? else {
+            break;
+        };
+
+        output.write_all(&serde_json::to_vec(&event)?).await?;
+        output.write_all(b"\n").await?;
+        count += 1;
+    }
+
+    output.flush().await?;
+    eprintln!("recorded {count} raw events to {}", args.output.display());
+    Ok(())
+}
+
+fn replay(args: ReplayArgs) -> Result<()> {
+    let input = StdFile::open(&args.input)
+        .with_context(|| format!("failed to open recording {}", args.input.display()))?;
+    let reader = StdBufReader::new(input);
+    let mut tracker = TouchFrameTracker::new();
+    let mut count = 0usize;
+
+    for (index, line) in reader.lines().enumerate() {
+        if args.limit > 0 && count >= args.limit {
+            break;
+        }
+
+        let line = line.with_context(|| {
+            format!(
+                "failed to read line {} from {}",
+                index + 1,
+                args.input.display()
+            )
+        })?;
+        if line.trim().is_empty() {
+            continue;
+        }
+
+        let event: RawInputEvent = serde_json::from_str(&line).with_context(|| {
+            format!(
+                "invalid raw event at {}:{}",
+                args.input.display(),
+                index + 1
+            )
+        })?;
+
+        if let Some(frame) = tracker.push(&event) {
+            count += 1;
+            print_frame(&frame, args.json)?;
+        }
+    }
+
+    Ok(())
+}
+
+async fn next_raw_event(
+    observer: &mut EvdevObserver,
+    idle_timeout: u64,
+) -> Result<Option<RawInputEvent>> {
+    if idle_timeout == 0 {
+        tokio::select! {
+            result = observer.next_event() => result.map(Some),
+            _ = tokio::signal::ctrl_c() => Ok(None),
+        }
+    } else {
+        tokio::select! {
+            result = tokio::time::timeout(
+                Duration::from_secs(idle_timeout),
+                observer.next_event(),
+            ) => match result {
+                Ok(event) => event.map(Some),
+                Err(_) => {
+                    eprintln!("idle timeout reached; no input event was received");
+                    Ok(None)
+                }
+            },
+            _ = tokio::signal::ctrl_c() => Ok(None),
+        }
+    }
+}
+
+fn print_frame(frame: &TouchFrame, json: bool) -> Result<()> {
+    if json {
+        println!("{}", serde_json::to_string(frame)?);
+        return Ok(());
+    }
+
+    let centroid = frame
+        .centroid
+        .map(|point| format!("({:.1},{:.1})", point.x, point.y))
+        .unwrap_or_else(|| "-".to_owned());
+    let delta = frame
+        .delta
+        .map(|point| format!("({:+.1},{:+.1})", point.x, point.y))
+        .unwrap_or_else(|| "-".to_owned());
+    let velocity = frame
+        .velocity_per_second
+        .map(|point| format!("({:+.1},{:+.1})", point.x, point.y))
+        .unwrap_or_else(|| "-".to_owned());
+
+    println!(
+        "{:>5} {:?} fingers={} tracked={} reported={:?} centroid={} delta={} velocity/s={}",
+        frame.sequence,
+        frame.phase,
+        frame.fingers,
+        frame.tracked_contacts,
+        frame.reported_fingers,
+        centroid,
+        delta,
+        velocity
+    );
     Ok(())
 }
 
