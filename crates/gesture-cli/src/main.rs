@@ -116,7 +116,11 @@ fn inspect(args: ConfigArgs) -> Result<()> {
         println!(
             "- {} [{}] priority={} consume={} trigger={} actions={}",
             binding.id,
-            if binding.enabled { "enabled" } else { "disabled" },
+            if binding.enabled {
+                "enabled"
+            } else {
+                "disabled"
+            },
             binding.priority,
             binding.consume,
             binding.trigger.family,

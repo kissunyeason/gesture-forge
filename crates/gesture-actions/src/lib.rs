@@ -160,10 +160,10 @@ impl ConditionProvider for CoreConditionProvider {
                 if !object.contains_key("value") {
                     bail!("condition requires a value parameter");
                 }
-                if spec.condition == "label" || spec.condition == "context" {
-                    if !object.get("key").is_some_and(|value| value.is_string()) {
-                        bail!("label/context condition requires a string key parameter");
-                    }
+                if (spec.condition == "label" || spec.condition == "context")
+                    && !object.get("key").is_some_and(|value| value.is_string())
+                {
+                    bail!("label/context condition requires a string key parameter");
                 }
                 Ok(())
             }
@@ -176,9 +176,9 @@ impl ConditionProvider for CoreConditionProvider {
         match spec.condition.as_str() {
             "always" => Ok(true),
             "app-id" => Ok(event.context.app_id.as_deref() == spec.params["value"].as_str()),
-            "window-title" => Ok(
-                event.context.window_title.as_deref() == spec.params["value"].as_str(),
-            ),
+            "window-title" => {
+                Ok(event.context.window_title.as_deref() == spec.params["value"].as_str())
+            }
             "label" => {
                 let key = spec.params["key"]
                     .as_str()

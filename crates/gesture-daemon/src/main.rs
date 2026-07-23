@@ -169,8 +169,7 @@ fn spawn_config_watcher(path: PathBuf, runtime: Arc<Runtime>) {
                 .and_then(|engine| {
                     engine.validate_providers(&runtime.actions, &runtime.conditions)?;
                     Ok(engine)
-                })
-            {
+                }) {
                 Ok(engine) => {
                     *runtime.engine.blocking_write() = engine;
                     info!(path = %path.display(), "configuration reloaded");
@@ -192,7 +191,10 @@ async fn prepare_socket(path: &Path) -> Result<()> {
     match tokio::fs::remove_file(path).await {
         Ok(()) => {}
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => return Err(error).with_context(|| format!("failed to remove stale socket {}", path.display())),
+        Err(error) => {
+            return Err(error)
+                .with_context(|| format!("failed to remove stale socket {}", path.display()))
+        }
     }
     Ok(())
 }
@@ -221,7 +223,6 @@ fn config_home() -> PathBuf {
 fn nonempty_path(value: &str) -> Option<PathBuf> {
     (!value.trim().is_empty()).then(|| PathBuf::from(value))
 }
-
 
 #[cfg(unix)]
 fn set_private_socket_permissions(path: &Path) -> Result<()> {

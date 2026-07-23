@@ -51,7 +51,11 @@ impl ActionRegistry {
         P: ActionProvider + 'static,
     {
         let name = provider.name().to_owned();
-        if self.providers.insert(name.clone(), Arc::new(provider)).is_some() {
+        if self
+            .providers
+            .insert(name.clone(), Arc::new(provider))
+            .is_some()
+        {
             bail!("action provider {name:?} is already registered");
         }
         Ok(())
@@ -86,7 +90,11 @@ impl ConditionRegistry {
         P: ConditionProvider + 'static,
     {
         let name = provider.name().to_owned();
-        if self.providers.insert(name.clone(), Arc::new(provider)).is_some() {
+        if self
+            .providers
+            .insert(name.clone(), Arc::new(provider))
+            .is_some()
+        {
             bail!("condition provider {name:?} is already registered");
         }
         Ok(())

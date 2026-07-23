@@ -53,13 +53,15 @@ impl Config {
         let path = path.as_ref();
         let source = fs::read_to_string(path)
             .with_context(|| format!("failed to read configuration {}", path.display()))?;
-        Self::parse(&source)
-            .with_context(|| format!("invalid configuration {}", path.display()))
+        Self::parse(&source).with_context(|| format!("invalid configuration {}", path.display()))
     }
 
     pub fn validate(&self) -> Result<()> {
         if self.version != 1 {
-            bail!("unsupported configuration version {}; expected 1", self.version);
+            bail!(
+                "unsupported configuration version {}; expected 1",
+                self.version
+            );
         }
 
         let mut ids = HashSet::new();
@@ -118,17 +120,20 @@ impl Binding {
         if self.id.trim().is_empty() {
             bail!("binding id must not be empty");
         }
-        self.trigger.validate()
+        self.trigger
+            .validate()
             .with_context(|| format!("binding {:?} has an invalid trigger", self.id))?;
         if self.actions.is_empty() {
             bail!("binding {:?} must define at least one action", self.id);
         }
         for action in &self.actions {
-            action.validate()
+            action
+                .validate()
                 .with_context(|| format!("binding {:?} has an invalid action", self.id))?;
         }
         for condition in &self.conditions {
-            condition.validate()
+            condition
+                .validate()
                 .with_context(|| format!("binding {:?} has an invalid condition", self.id))?;
         }
         Ok(())

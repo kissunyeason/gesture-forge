@@ -104,11 +104,10 @@ impl EvdevObserver {
     }
 
     pub async fn next_event(&mut self) -> Result<RawInputEvent> {
-        let event = self
-            .stream
-            .next_event()
-            .await
-            .with_context(|| format!("failed to read events from {}", self.info.path.display()))?;
+        let event =
+            self.stream.next_event().await.with_context(|| {
+                format!("failed to read events from {}", self.info.path.display())
+            })?;
 
         let timestamp_micros = event
             .timestamp()
@@ -147,9 +146,13 @@ fn describe_device(path: PathBuf, device: &Device) -> DeviceInfo {
         semi_mt_property: properties.contains(PropType::SEMI_MT),
     };
 
-    let class = classify_device(&normalized_name, &capabilities, relative_axes.is_some_and(|axes| {
-        axes.contains(RelativeAxisCode::REL_X) && axes.contains(RelativeAxisCode::REL_Y)
-    }));
+    let class = classify_device(
+        &normalized_name,
+        &capabilities,
+        relative_axes.is_some_and(|axes| {
+            axes.contains(RelativeAxisCode::REL_X) && axes.contains(RelativeAxisCode::REL_Y)
+        }),
+    );
 
     DeviceInfo {
         path,
