@@ -39,6 +39,7 @@ This is read-only and does not call `EVIOCGRAB`.
 cargo run -p gesture-cli -- record \
   --device /dev/input/event8 \
   --output touchpad.jsonl \
+  --exclusive \
   --idle-timeout 15
 
 cargo run -p gesture-cli -- replay \
@@ -48,6 +49,12 @@ cargo run -p gesture-cli -- replay \
 
 A recording contains one serialized `RawInputEvent` per line. Replay uses the
 same tracker as live input, allowing deterministic tests without hardware.
+
+`--exclusive` (also accepted as `--grab`) requests Linux `EVIOCGRAB` for the
+duration of the recording. Other clients, including the desktop compositor, do
+not receive those events, so workspace and overview gestures are not triggered.
+The grab is tied to the open device file and is released when the recorder exits.
+Without this option, recording remains shared and desktop gestures may run.
 
 Touch frames are not gestures and do not contain actions. Swipe, drag, pinch,
 rotation, tap, and hold recognizers will consume these frames in later layers.

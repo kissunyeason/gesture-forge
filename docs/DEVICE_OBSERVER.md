@@ -1,7 +1,7 @@
-# Read-only evdev observer
+# Evdev observer and exclusive recorder
 
-GestureForge 0.2 adds device discovery and raw event observation without
-claiming the device.
+GestureForge provides shared device discovery and raw event observation.
+GestureForge 0.3.1 also adds an explicit exclusive mode for sample recording.
 
 ## List readable devices
 
@@ -45,5 +45,15 @@ cargo run -p gesture-cli -- frames \
 ```
 
 For deterministic diagnostics, use `record` to create raw JSON Lines and
-`replay` to run the same data through the frame tracker. See
-[TOUCH_FRAMES.md](TOUCH_FRAMES.md).
+`replay` to run the same data through the frame tracker. When desktop gestures
+would interfere with sampling, use:
+
+```bash
+cargo run -p gesture-cli -- record \
+  --device /dev/input/event8 \
+  --output sample.jsonl \
+  --exclusive
+```
+
+The `--exclusive` option is deliberately opt-in. It calls `EVIOCGRAB` only for
+the lifetime of the recorder process. See [TOUCH_FRAMES.md](TOUCH_FRAMES.md).

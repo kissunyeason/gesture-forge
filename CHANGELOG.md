@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.1 - exclusive recording hotfix
+
+- add opt-in `record --exclusive` / `record --grab`;
+- use Linux `EVIOCGRAB` so desktop and compositor gestures do not run while a sample is captured;
+- release the grab automatically when the recorder exits;
+- keep shared non-grabbing capture as the default.
+
+
 ## 0.3.0 - multitouch frame tracker
 
 - add protocol-B slot and tracking-ID parsing;

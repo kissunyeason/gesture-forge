@@ -123,6 +123,9 @@ struct RecordArgs {
     /// Input event node, for example /dev/input/event8.
     #[arg(long)]
     device: PathBuf,
+    /// Temporarily grab the device so desktop gestures do not run while recording.
+    #[arg(long, visible_alias = "grab")]
+    exclusive: bool,
     /// Destination JSON Lines file.
     #[arg(long)]
     output: PathBuf,
@@ -319,17 +322,28 @@ async fn frames(args: FramesArgs) -> Result<()> {
 }
 
 async fn record(args: RecordArgs) -> Result<()> {
-    let mut observer = EvdevObserver::open(&args.device)?;
+    let mut observer = if args.exclusive {
+        EvdevObserver::open_exclusive(&args.device)?
+    } else {
+        EvdevObserver::open(&args.device)?
+    };
     let mut output = tokio::fs::File::create(&args.output)
         .await
         .with_context(|| format!("failed to create recording {}", args.output.display()))?;
     let mut count = 0usize;
 
+    let delivery_mode = if observer.is_exclusive() {
+        "exclusive mode; desktop gestures are temporarily blocked"
+    } else {
+        "shared mode; desktop gestures may still run"
+    };
+
     eprintln!(
-        "recording raw events from {} ({}) to {} without grabbing the device",
+        "recording raw events from {} ({}) to {} in {}",
         observer.info().path.display(),
         observer.info().name,
-        args.output.display()
+        args.output.display(),
+        delivery_mode
     );
 
     loop {

@@ -78,29 +78,64 @@ pub fn inspect_device(path: impl AsRef<Path>) -> Result<DeviceInfo> {
     Ok(describe_device(path.to_path_buf(), &device))
 }
 
-/// Read-only asynchronous monitor for a single evdev node.
+/// Asynchronous monitor for a single evdev node.
 ///
-/// This never calls `EVIOCGRAB`, never creates a uinput device, and never emits
-/// synthetic events. It is intended for diagnostics and recording research.
+/// Shared mode is read-only and leaves events visible to the desktop. Exclusive
+/// mode calls `EVIOCGRAB`, preventing other clients from receiving events until
+/// this object is dropped. Neither mode creates a uinput device or emits
+/// synthetic events.
 pub struct EvdevObserver {
     info: DeviceInfo,
     stream: EventStream,
+    exclusive: bool,
 }
 
 impl EvdevObserver {
+    /// Open a device without changing event delivery to other clients.
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
+        Self::open_with_grab(path, false)
+    }
+
+    /// Open a device and request exclusive event delivery with `EVIOCGRAB`.
+    ///
+    /// The kernel releases the grab automatically when the underlying file
+    /// descriptor is closed, including normal return, Ctrl+C, panic, or process
+    /// termination.
+    pub fn open_exclusive(path: impl AsRef<Path>) -> Result<Self> {
+        Self::open_with_grab(path, true)
+    }
+
+    fn open_with_grab(path: impl AsRef<Path>, exclusive: bool) -> Result<Self> {
         let path = path.as_ref();
-        let device = Device::open(path)
+        let mut device = Device::open(path)
             .with_context(|| format!("failed to open input device {}", path.display()))?;
         let info = describe_device(path.to_path_buf(), &device);
+
+        if exclusive {
+            device.grab().with_context(|| {
+                format!(
+                    "failed to exclusively grab {}; another process may already own it",
+                    path.display()
+                )
+            })?;
+        }
+
         let stream = device
             .into_event_stream()
             .with_context(|| format!("failed to create event stream for {}", path.display()))?;
-        Ok(Self { info, stream })
+        Ok(Self {
+            info,
+            stream,
+            exclusive,
+        })
     }
 
     pub fn info(&self) -> &DeviceInfo {
         &self.info
+    }
+
+    pub fn is_exclusive(&self) -> bool {
+        self.exclusive
     }
 
     pub async fn next_event(&mut self) -> Result<RawInputEvent> {

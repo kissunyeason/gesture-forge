@@ -9,16 +9,18 @@ A gesture never has a hard-coded action. Backends publish normalized events, bin
 
 ## Project status
 
-`0.3.0` is the multitouch frame release. It includes the read-only observer plus:
+`0.3.1` is the multitouch frame release with an exclusive-recording hotfix. It includes the read-only observer plus:
 
 - Linux evdev device discovery and non-grabbing observation;
 - protocol-B slot and tracking-ID parsing;
 - normalized contact frames with finger count, centroid, displacement, and velocity;
 - live frame inspection plus raw JSON Lines recording and offline replay.
 
-It **does not grab the real touchpad**, create a virtual input device, or inject
-input. That is intentional: this version can run alongside the current setup
-while we identify the exact hardware event stream. Hardware proxying and configurable gesture recognizers remain later milestones.
+Shared observation remains non-grabbing. Recording can opt into a temporary
+`EVIOCGRAB` with `record --exclusive` so GNOME and other clients do not receive
+the sample gestures. GestureForge still does not create a virtual input device
+or inject input. Hardware proxying and configurable recognizers remain later
+milestones.
 
 ## Architecture
 
@@ -101,8 +103,14 @@ GPL-3.0-or-later. Contributions remain open source.
 cargo run -p gesture-cli -- devices --touchpads-only
 cargo run -p gesture-cli -- monitor --device /dev/input/event8 --idle-timeout 10
 cargo run -p gesture-cli -- frames --device /dev/input/event8 --json
-cargo run -p gesture-cli -- record --device /dev/input/event8 --output sample.jsonl
+cargo run -p gesture-cli -- record \
+  --device /dev/input/event8 \
+  --output sample.jsonl \
+  --exclusive
 cargo run -p gesture-cli -- replay --input sample.jsonl --json
 ```
 
-The monitor never grabs the device. See [the observer documentation](docs/DEVICE_OBSERVER.md).
+`monitor` and `frames` never grab the device. `record` is shared by default;
+add `--exclusive` (alias `--grab`) when collecting gesture samples so desktop
+gestures are temporarily blocked. The grab ends when the recorder exits. See
+[the observer documentation](docs/DEVICE_OBSERVER.md).
