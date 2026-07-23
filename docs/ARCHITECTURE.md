@@ -49,3 +49,11 @@ The hardware proxy will:
 - fail open, releasing the physical device when the daemon exits.
 
 Record/replay fixtures will make recognizer changes testable without hardware.
+
+## v0.4 recognizer boundary
+
+`gesture-recognition` consumes only `TouchFrame` values and publishes only
+`InputEvent` values. It does not import action providers or desktop adapters.
+The first recognizers classify completed three-finger sessions as cardinal
+swipes or stationary holds using configurable distance, velocity, duration,
+and direction-tolerance thresholds.

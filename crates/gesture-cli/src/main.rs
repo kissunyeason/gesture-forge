@@ -3,7 +3,7 @@ use std::{
     env,
     fs::File as StdFile,
     io::{BufRead, BufReader as StdBufReader},
-    path::PathBuf,
+    path::{Path, PathBuf},
     time::Duration,
 };
 
@@ -14,13 +14,17 @@ use gesture_core::{Config, Engine, InputEvent};
 use gesture_device::{
     enumerate_devices, DeviceInfo, EvdevObserver, RawInputEvent, TouchFrame, TouchFrameTracker,
 };
+use gesture_recognition::{GestureRecognizer, RecognizerConfig};
 use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
     net::UnixStream,
 };
 
 #[derive(Debug, Parser)]
-#[command(version, about = "GestureForge configuration and simulation tool")]
+#[command(
+    version,
+    about = "GestureForge input, recognition, and configuration tool"
+)]
 struct Cli {
     #[command(subcommand)]
     command: Command,
@@ -44,6 +48,10 @@ enum Command {
     Record(RecordArgs),
     /// Replay a JSON Lines recording through the touch-frame tracker.
     Replay(ReplayArgs),
+    /// Recognize live touchpad gestures from normalized frames.
+    Gestures(GesturesArgs),
+    /// Recognize gestures from a raw JSON Lines recording.
+    Recognize(RecognizeArgs),
 }
 
 #[derive(Debug, Args)]
@@ -150,6 +158,44 @@ struct ReplayArgs {
     limit: usize,
 }
 
+#[derive(Debug, Args)]
+struct GesturesArgs {
+    /// Input event node, for example /dev/input/event8.
+    #[arg(long)]
+    device: PathBuf,
+    /// Temporarily grab the device while recognizing gestures.
+    #[arg(long, visible_alias = "grab")]
+    exclusive: bool,
+    /// Optional recognizer TOML. Built-in v0.4 defaults are used when omitted.
+    #[arg(long, env = "GESTURE_FORGE_RECOGNIZER_CONFIG")]
+    recognizer_config: Option<PathBuf>,
+    /// Emit one JSON object per recognized gesture.
+    #[arg(long)]
+    json: bool,
+    /// Stop after this many recognized gestures. Zero means unlimited.
+    #[arg(long, default_value_t = 0)]
+    limit: usize,
+    /// Stop when no raw event arrives for this many seconds. Zero disables it.
+    #[arg(long, default_value_t = 10)]
+    idle_timeout: u64,
+}
+
+#[derive(Debug, Args)]
+struct RecognizeArgs {
+    /// JSON Lines file created by `gesture-forge record` or `monitor --json`.
+    #[arg(long)]
+    input: PathBuf,
+    /// Optional recognizer TOML. Built-in v0.4 defaults are used when omitted.
+    #[arg(long, env = "GESTURE_FORGE_RECOGNIZER_CONFIG")]
+    recognizer_config: Option<PathBuf>,
+    /// Emit one JSON object per recognized gesture.
+    #[arg(long)]
+    json: bool,
+    /// Stop after this many recognized gestures. Zero means unlimited.
+    #[arg(long, default_value_t = 0)]
+    limit: usize,
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     match Cli::parse().command {
@@ -161,6 +207,8 @@ async fn main() -> Result<()> {
         Command::Frames(args) => frames(args).await,
         Command::Record(args) => record(args).await,
         Command::Replay(args) => replay(args),
+        Command::Gestures(args) => gestures(args).await,
+        Command::Recognize(args) => recognize(args),
     }
 }
 
@@ -365,6 +413,54 @@ async fn record(args: RecordArgs) -> Result<()> {
     Ok(())
 }
 
+async fn gestures(args: GesturesArgs) -> Result<()> {
+    let mut observer = if args.exclusive {
+        EvdevObserver::open_exclusive(&args.device)?
+    } else {
+        EvdevObserver::open(&args.device)?
+    };
+    let config = load_recognizer_config(args.recognizer_config.as_deref())?;
+    let mut tracker = TouchFrameTracker::new();
+    let mut recognizer = GestureRecognizer::new(config)?;
+    let mut count = 0usize;
+
+    let delivery_mode = if observer.is_exclusive() {
+        "exclusive mode; desktop gestures are temporarily blocked"
+    } else {
+        "shared mode; desktop gestures may still run"
+    };
+    eprintln!(
+        "recognizing gestures from {} ({}) in {}",
+        observer.info().path.display(),
+        observer.info().name,
+        delivery_mode
+    );
+
+    loop {
+        if args.limit > 0 && count >= args.limit {
+            break;
+        }
+
+        let Some(raw_event) = next_raw_event(&mut observer, args.idle_timeout).await? else {
+            break;
+        };
+
+        let Some(frame) = tracker.push(&raw_event) else {
+            continue;
+        };
+
+        for event in recognizer.push(&frame) {
+            print_gesture(&event, args.json)?;
+            count += 1;
+            if args.limit > 0 && count >= args.limit {
+                break;
+            }
+        }
+    }
+
+    Ok(())
+}
+
 fn replay(args: ReplayArgs) -> Result<()> {
     let input = StdFile::open(&args.input)
         .with_context(|| format!("failed to open recording {}", args.input.display()))?;
@@ -402,6 +498,92 @@ fn replay(args: ReplayArgs) -> Result<()> {
         }
     }
 
+    Ok(())
+}
+
+fn recognize(args: RecognizeArgs) -> Result<()> {
+    let input = StdFile::open(&args.input)
+        .with_context(|| format!("failed to open recording {}", args.input.display()))?;
+    let reader = StdBufReader::new(input);
+    let config = load_recognizer_config(args.recognizer_config.as_deref())?;
+    let mut tracker = TouchFrameTracker::new();
+    let mut recognizer = GestureRecognizer::new(config)?;
+    let mut count = 0usize;
+
+    for (index, line) in reader.lines().enumerate() {
+        if args.limit > 0 && count >= args.limit {
+            break;
+        }
+
+        let line = line.with_context(|| {
+            format!(
+                "failed to read line {} from {}",
+                index + 1,
+                args.input.display()
+            )
+        })?;
+        if line.trim().is_empty() {
+            continue;
+        }
+
+        let raw_event: RawInputEvent = serde_json::from_str(&line).with_context(|| {
+            format!(
+                "invalid raw event at {}:{}",
+                args.input.display(),
+                index + 1
+            )
+        })?;
+
+        let Some(frame) = tracker.push(&raw_event) else {
+            continue;
+        };
+
+        for event in recognizer.push(&frame) {
+            print_gesture(&event, args.json)?;
+            count += 1;
+            if args.limit > 0 && count >= args.limit {
+                break;
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn load_recognizer_config(path: Option<&Path>) -> Result<RecognizerConfig> {
+    match path {
+        Some(path) => RecognizerConfig::load(path),
+        None => {
+            let config = RecognizerConfig::default();
+            config.validate()?;
+            Ok(config)
+        }
+    }
+}
+
+fn print_gesture(event: &InputEvent, json: bool) -> Result<()> {
+    if json {
+        println!("{}", serde_json::to_string(event)?);
+        return Ok(());
+    }
+
+    let fingers = event
+        .fingers
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "-".to_owned());
+    let direction = event.direction.as_deref().unwrap_or("-");
+    let distance = event.values.get("distance").copied().unwrap_or_default();
+    let velocity = event
+        .values
+        .get("average_velocity")
+        .copied()
+        .unwrap_or_default();
+    let duration = event.values.get("duration_ms").copied().unwrap_or_default();
+
+    println!(
+        "{} phase={} fingers={} direction={} distance={:.1} velocity={:.1}/s duration={:.1}ms",
+        event.family, event.phase, fingers, direction, distance, velocity, duration
+    );
     Ok(())
 }
 

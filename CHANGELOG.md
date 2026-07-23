@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.4.0 - session gesture recognition
+
+- add an independent `gesture-recognition` crate;
+- classify completed three-finger sessions as cardinal swipes or stationary holds;
+- combine distance, average velocity, duration, and axis deviation instead of relying on one metric;
+- add configurable recognition thresholds with validation;
+- add live `gestures` and offline `recognize` CLI commands;
+- validate the candidate thresholds against 21 swipe and 15 negative development samples.
+
 ## 0.3.1 - exclusive recording hotfix
 
 - add opt-in `record --exclusive` / `record --grab`;

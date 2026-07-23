@@ -56,5 +56,6 @@ not receive those events, so workspace and overview gestures are not triggered.
 The grab is tied to the open device file and is released when the recorder exits.
 Without this option, recording remains shared and desktop gestures may run.
 
-Touch frames are not gestures and do not contain actions. Swipe, drag, pinch,
-rotation, tap, and hold recognizers will consume these frames in later layers.
+Touch frames are not gestures and do not contain actions. The independent
+`gesture-recognition` crate now consumes them for v0.4 swipe and hold events.
+Drag, pinch, rotation, and tap remain future recognizers.

@@ -12,8 +12,9 @@
 - [x] read-only evdev discovery and device selection;
 - [x] raw diagnostic observer with JSON Lines output;
 - uinput clone and fail-open cleanup;
-- raw multitouch frame recorder/replayer;
-- swipe, tap, hold, drag, pinch, and rotate recognizers;
+- [x] raw multitouch frame recorder/replayer;
+- [x] configurable three-finger swipe and hold recognizers;
+- tap, drag, pinch, and rotate recognizers;
 - passthrough policy for unclaimed events.
 
 ## Milestone 2 - useful actions and context

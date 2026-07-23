@@ -236,7 +236,7 @@ dependencies = [
 
 [[package]]
 name = "gesture-actions"
-version = "0.3.1"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -249,20 +249,21 @@ dependencies = [
 
 [[package]]
 name = "gesture-cli"
-version = "0.3.1"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "clap",
  "gesture-actions",
  "gesture-core",
  "gesture-device",
+ "gesture-recognition",
  "serde_json",
  "tokio",
 ]
 
 [[package]]
 name = "gesture-core"
-version = "0.3.1"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -277,7 +278,7 @@ dependencies = [
 
 [[package]]
 name = "gesture-daemon"
-version = "0.3.1"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -293,7 +294,7 @@ dependencies = [
 
 [[package]]
 name = "gesture-device"
-version = "0.3.1"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -301,6 +302,17 @@ dependencies = [
  "gesture-core",
  "serde",
  "tokio",
+]
+
+[[package]]
+name = "gesture-recognition"
+version = "0.4.0"
+dependencies = [
+ "anyhow",
+ "gesture-core",
+ "gesture-device",
+ "serde",
+ "toml",
 ]
 
 [[package]]

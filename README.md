@@ -9,18 +9,20 @@ A gesture never has a hard-coded action. Backends publish normalized events, bin
 
 ## Project status
 
-`0.3.1` is the multitouch frame release with an exclusive-recording hotfix. It includes the read-only observer plus:
+`0.4.0` is the first action-agnostic gesture recognition release. It includes the read-only observer, multitouch frames, and:
 
 - Linux evdev device discovery and non-grabbing observation;
 - protocol-B slot and tracking-ID parsing;
 - normalized contact frames with finger count, centroid, displacement, and velocity;
-- live frame inspection plus raw JSON Lines recording and offline replay.
+- live frame inspection plus raw JSON Lines recording and offline replay;
+- configurable three-finger swipe and hold recognition at touch-session end;
+- live and offline recognition commands that emit standard `InputEvent` objects.
 
-Shared observation remains non-grabbing. Recording can opt into a temporary
-`EVIOCGRAB` with `record --exclusive` so GNOME and other clients do not receive
-the sample gestures. GestureForge still does not create a virtual input device
-or inject input. Hardware proxying and configurable recognizers remain later
-milestones.
+Shared observation remains non-grabbing. Recording and live recognition can opt
+into a temporary `EVIOCGRAB` so GNOME and other clients do not receive test
+gestures. GestureForge still does not create a virtual input device or inject
+input. Hardware proxying, passthrough, drag, tap, pinch, and rotation remain
+later milestones.
 
 ## Architecture
 
@@ -34,10 +36,11 @@ physical input -> backend -> normalized event -> matcher -> conditions
 - `gesture-core`: event schema, configuration, validation, matching, provider APIs.
 - `gesture-actions`: independently registered action providers.
 - `gesture-device`: evdev discovery, raw observation, protocol-B frame tracking, and backend interfaces.
+- `gesture-recognition`: configurable frame-to-event recognition without actions.
 - `gesture-daemon`: configuration reload, event socket, dispatch.
 - `gesture-cli`: validate configs, inspect devices, record/replay input, and inject simulations.
 
-See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), [docs/TOUCH_FRAMES.md](docs/TOUCH_FRAMES.md), [docs/CONFIGURATION.md](docs/CONFIGURATION.md), [docs/PLUGIN_API.md](docs/PLUGIN_API.md), [docs/PRIOR_ART.md](docs/PRIOR_ART.md), and [docs/ROADMAP.md](docs/ROADMAP.md).
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), [docs/TOUCH_FRAMES.md](docs/TOUCH_FRAMES.md), [docs/GESTURE_RECOGNITION.md](docs/GESTURE_RECOGNITION.md), [docs/CONFIGURATION.md](docs/CONFIGURATION.md), [docs/PLUGIN_API.md](docs/PLUGIN_API.md), [docs/PRIOR_ART.md](docs/PRIOR_ART.md), and [docs/ROADMAP.md](docs/ROADMAP.md).
 
 ## Build
 
@@ -108,6 +111,8 @@ cargo run -p gesture-cli -- record \
   --output sample.jsonl \
   --exclusive
 cargo run -p gesture-cli -- replay --input sample.jsonl --json
+cargo run -p gesture-cli -- recognize --input sample.jsonl --json
+cargo run -p gesture-cli -- gestures --device /dev/input/event8 --exclusive
 ```
 
 `monitor` and `frames` never grab the device. `record` is shared by default;
