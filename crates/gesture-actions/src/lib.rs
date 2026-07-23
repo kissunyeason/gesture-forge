@@ -1,0 +1,197 @@
+//! Built-in action and condition providers.
+
+use anyhow::{bail, Context, Result};
+use async_trait::async_trait;
+use gesture_core::{
+    ActionOutcome, ActionProvider, ActionRegistry, ActionSpec, ConditionProvider,
+    ConditionRegistry, ConditionSpec, InputEvent,
+};
+use serde::Deserialize;
+use tokio::process::Command;
+use tracing::{debug, error, info, warn};
+
+pub fn default_action_registry(allow_commands: bool) -> Result<ActionRegistry> {
+    let mut registry = ActionRegistry::default();
+    registry.register(CoreActionProvider)?;
+    if allow_commands {
+        registry.register(ProcessActionProvider)?;
+    }
+    Ok(registry)
+}
+
+pub fn default_condition_registry() -> Result<ConditionRegistry> {
+    let mut registry = ConditionRegistry::default();
+    registry.register(CoreConditionProvider)?;
+    Ok(registry)
+}
+
+pub struct CoreActionProvider;
+
+#[derive(Debug, Deserialize)]
+struct LogParams {
+    message: String,
+    #[serde(default = "default_info_level")]
+    level: String,
+}
+
+fn default_info_level() -> String {
+    "info".to_owned()
+}
+
+#[async_trait]
+impl ActionProvider for CoreActionProvider {
+    fn name(&self) -> &'static str {
+        "core"
+    }
+
+    fn validate(&self, spec: &ActionSpec) -> Result<()> {
+        match spec.action.as_str() {
+            "noop" => Ok(()),
+            "log" => {
+                let params: LogParams = serde_json::from_value(spec.params.clone())
+                    .context("core.log expects { message, level? }")?;
+                if params.message.trim().is_empty() {
+                    bail!("core.log message must not be empty");
+                }
+                match params.level.as_str() {
+                    "debug" | "info" | "warn" | "error" => Ok(()),
+                    other => bail!("unsupported core.log level {other:?}"),
+                }
+            }
+            other => bail!("unknown core action {other:?}"),
+        }
+    }
+
+    async fn execute(&self, spec: &ActionSpec, event: &InputEvent) -> Result<ActionOutcome> {
+        self.validate(spec)?;
+        match spec.action.as_str() {
+            "noop" => Ok(ActionOutcome::success(spec, Some("no operation".into()))),
+            "log" => {
+                let params: LogParams = serde_json::from_value(spec.params.clone())?;
+                match params.level.as_str() {
+                    "debug" => debug!(event_id = %event.id, "{}", params.message),
+                    "info" => info!(event_id = %event.id, "{}", params.message),
+                    "warn" => warn!(event_id = %event.id, "{}", params.message),
+                    "error" => error!(event_id = %event.id, "{}", params.message),
+                    _ => unreachable!("validated above"),
+                }
+                Ok(ActionOutcome::success(spec, Some(params.message)))
+            }
+            _ => unreachable!("validated above"),
+        }
+    }
+}
+
+pub struct ProcessActionProvider;
+
+#[derive(Debug, Deserialize)]
+struct RunParams {
+    program: String,
+    #[serde(default)]
+    args: Vec<String>,
+    #[serde(default)]
+    wait: bool,
+}
+
+#[async_trait]
+impl ActionProvider for ProcessActionProvider {
+    fn name(&self) -> &'static str {
+        "process"
+    }
+
+    fn validate(&self, spec: &ActionSpec) -> Result<()> {
+        if spec.action != "run" {
+            bail!("unknown process action {:?}", spec.action);
+        }
+        let params: RunParams = serde_json::from_value(spec.params.clone())
+            .context("process.run expects { program, args?, wait? }")?;
+        if params.program.trim().is_empty() {
+            bail!("process.run program must not be empty");
+        }
+        Ok(())
+    }
+
+    async fn execute(&self, spec: &ActionSpec, _event: &InputEvent) -> Result<ActionOutcome> {
+        self.validate(spec)?;
+        let params: RunParams = serde_json::from_value(spec.params.clone())?;
+        let mut command = Command::new(&params.program);
+        command.args(&params.args);
+
+        if params.wait {
+            let status = command
+                .status()
+                .await
+                .with_context(|| format!("failed to launch {:?}", params.program))?;
+            if !status.success() {
+                bail!("program {:?} exited with {status}", params.program);
+            }
+            Ok(ActionOutcome::success(
+                spec,
+                Some(format!("program exited successfully: {}", params.program)),
+            ))
+        } else {
+            command
+                .spawn()
+                .with_context(|| format!("failed to launch {:?}", params.program))?;
+            Ok(ActionOutcome::success(
+                spec,
+                Some(format!("program started: {}", params.program)),
+            ))
+        }
+    }
+}
+
+pub struct CoreConditionProvider;
+
+#[async_trait]
+impl ConditionProvider for CoreConditionProvider {
+    fn name(&self) -> &'static str {
+        "core"
+    }
+
+    fn validate(&self, spec: &ConditionSpec) -> Result<()> {
+        match spec.condition.as_str() {
+            "always" => Ok(()),
+            "app-id" | "window-title" | "label" | "context" => {
+                let object = spec
+                    .params
+                    .as_object()
+                    .context("condition parameters must be a table")?;
+                if !object.contains_key("value") {
+                    bail!("condition requires a value parameter");
+                }
+                if spec.condition == "label" || spec.condition == "context" {
+                    if !object.get("key").is_some_and(|value| value.is_string()) {
+                        bail!("label/context condition requires a string key parameter");
+                    }
+                }
+                Ok(())
+            }
+            other => bail!("unknown core condition {other:?}"),
+        }
+    }
+
+    async fn evaluate(&self, spec: &ConditionSpec, event: &InputEvent) -> Result<bool> {
+        self.validate(spec)?;
+        match spec.condition.as_str() {
+            "always" => Ok(true),
+            "app-id" => Ok(event.context.app_id.as_deref() == spec.params["value"].as_str()),
+            "window-title" => Ok(
+                event.context.window_title.as_deref() == spec.params["value"].as_str(),
+            ),
+            "label" => {
+                let key = spec.params["key"]
+                    .as_str()
+                    .context("label key must be a string")?;
+                Ok(event.labels.get(key).map(String::as_str) == spec.params["value"].as_str())
+            }
+            "context" => {
+                let key = spec.params["key"]
+                    .as_str()
+                    .context("context key must be a string")?;
+                Ok(event.context.extra.get(key) == spec.params.get("value"))
+            }
+            _ => unreachable!("validated above"),
+        }
+    }
+}

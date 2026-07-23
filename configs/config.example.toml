@@ -1,0 +1,31 @@
+version = 1
+
+[runtime]
+socket_path = ""
+log_level = "info"
+
+[security]
+allow_command_actions = false
+
+# This example is intentionally harmless. It demonstrates that a trigger and
+# an action are separate configuration objects. Replace or add action providers
+# without modifying the recognizer.
+[[bindings]]
+id = "demo-three-finger-up"
+enabled = true
+priority = 100
+consume = false
+
+[bindings.trigger]
+family = "touchpad.swipe"
+phases = ["end"]
+fingers = [3]
+directions = ["up"]
+
+[[bindings.actions]]
+provider = "core"
+action = "log"
+
+[bindings.actions.params]
+message = "Matched a configurable three-finger upward swipe"
+level = "info"

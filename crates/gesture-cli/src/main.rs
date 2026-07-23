@@ -1,0 +1,166 @@
+use std::{collections::BTreeMap, env, path::PathBuf};
+
+use anyhow::{Context, Result};
+use clap::{Args, Parser, Subcommand};
+use gesture_actions::{default_action_registry, default_condition_registry};
+use gesture_core::{Config, Engine, InputEvent};
+use tokio::{
+    io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
+    net::UnixStream,
+};
+
+#[derive(Debug, Parser)]
+#[command(version, about = "GestureForge configuration and simulation tool")]
+struct Cli {
+    #[command(subcommand)]
+    command: Command,
+}
+
+#[derive(Debug, Subcommand)]
+enum Command {
+    /// Parse the configuration and validate all registered providers.
+    Validate(ConfigArgs),
+    /// Print a summary of configured bindings.
+    Inspect(ConfigArgs),
+    /// Send a normalized event to a running GestureForge daemon.
+    Simulate(SimulateArgs),
+}
+
+#[derive(Debug, Args)]
+struct ConfigArgs {
+    #[arg(long, env = "GESTURE_FORGE_CONFIG", default_value_os_t = default_config_path())]
+    config: PathBuf,
+}
+
+#[derive(Debug, Args)]
+struct SimulateArgs {
+    #[arg(long, env = "GESTURE_FORGE_SOCKET", default_value_os_t = default_socket_path())]
+    socket: PathBuf,
+    #[arg(long)]
+    family: String,
+    #[arg(long, default_value = "end")]
+    phase: String,
+    #[arg(long)]
+    fingers: Option<u8>,
+    #[arg(long)]
+    direction: Option<String>,
+    /// Numeric metric in key=value form. May be repeated.
+    #[arg(long = "value", value_parser = parse_metric)]
+    values: Vec<(String, f64)>,
+    /// String label in key=value form. May be repeated.
+    #[arg(long = "label", value_parser = parse_label)]
+    labels: Vec<(String, String)>,
+    #[arg(long)]
+    app_id: Option<String>,
+    #[arg(long)]
+    window_title: Option<String>,
+}
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    match Cli::parse().command {
+        Command::Validate(args) => validate(args),
+        Command::Inspect(args) => inspect(args),
+        Command::Simulate(args) => simulate(args).await,
+    }
+}
+
+fn validate(args: ConfigArgs) -> Result<()> {
+    let config = Config::load(&args.config)?;
+    let actions = default_action_registry(config.security.allow_command_actions)?;
+    let conditions = default_condition_registry()?;
+    let engine = Engine::new(config)?;
+    engine.validate_providers(&actions, &conditions)?;
+    println!("configuration is valid: {}", args.config.display());
+    Ok(())
+}
+
+fn inspect(args: ConfigArgs) -> Result<()> {
+    let config = Config::load(&args.config)?;
+    println!("version: {}", config.version);
+    println!("bindings: {}", config.bindings.len());
+    for binding in config.bindings {
+        println!(
+            "- {} [{}] priority={} consume={} trigger={} actions={}",
+            binding.id,
+            if binding.enabled { "enabled" } else { "disabled" },
+            binding.priority,
+            binding.consume,
+            binding.trigger.family,
+            binding
+                .actions
+                .iter()
+                .map(|action| format!("{}.{}", action.provider, action.action))
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+    }
+    Ok(())
+}
+
+async fn simulate(args: SimulateArgs) -> Result<()> {
+    let mut event = InputEvent::new(args.family, args.phase);
+    event.fingers = args.fingers;
+    event.direction = args.direction;
+    event.values = args.values.into_iter().collect::<BTreeMap<_, _>>();
+    event.labels = args.labels.into_iter().collect::<BTreeMap<_, _>>();
+    event.context.app_id = args.app_id;
+    event.context.window_title = args.window_title;
+
+    let mut stream = UnixStream::connect(&args.socket)
+        .await
+        .with_context(|| format!("failed to connect to {}", args.socket.display()))?;
+    let payload = serde_json::to_vec(&event)?;
+    stream.write_all(&payload).await?;
+    stream.write_all(b"\n").await?;
+
+    let mut response = String::new();
+    BufReader::new(stream).read_line(&mut response).await?;
+    print!("{response}");
+    Ok(())
+}
+
+fn parse_metric(value: &str) -> std::result::Result<(String, f64), String> {
+    let (key, value) = split_pair(value)?;
+    let number = value
+        .parse::<f64>()
+        .map_err(|error| format!("invalid numeric value {value:?}: {error}"))?;
+    Ok((key.to_owned(), number))
+}
+
+fn parse_label(value: &str) -> std::result::Result<(String, String), String> {
+    let (key, value) = split_pair(value)?;
+    Ok((key.to_owned(), value.to_owned()))
+}
+
+fn split_pair(value: &str) -> std::result::Result<(&str, &str), String> {
+    let (key, value) = value
+        .split_once('=')
+        .ok_or_else(|| "expected key=value".to_owned())?;
+    if key.trim().is_empty() {
+        Err("key must not be empty".to_owned())
+    } else {
+        Ok((key, value))
+    }
+}
+
+fn default_config_path() -> PathBuf {
+    config_home().join("gesture-forge/config.toml")
+}
+
+fn default_socket_path() -> PathBuf {
+    env::var_os("XDG_RUNTIME_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            let user = env::var("USER").unwrap_or_else(|_| "user".to_owned());
+            env::temp_dir().join(format!("gesture-forge-{user}"))
+        })
+        .join("gesture-forge.sock")
+}
+
+fn config_home() -> PathBuf {
+    env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .or_else(|| env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))
+        .unwrap_or_else(|| PathBuf::from(".config"))
+}

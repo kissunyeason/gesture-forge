@@ -1,0 +1,13 @@
+[package]
+name = "gesture-device"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+async-trait.workspace = true
+gesture-core = { path = "../gesture-core" }
+tokio.workspace = true

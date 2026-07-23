@@ -1,0 +1,31 @@
+[workspace]
+members = [
+    "crates/gesture-core",
+    "crates/gesture-actions",
+    "crates/gesture-device",
+    "crates/gesture-daemon",
+    "crates/gesture-cli",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-or-later"
+authors = ["GestureForge contributors"]
+repository = "https://github.com/REPLACE_ME/gesture-forge"
+rust-version = "1.78"
+
+[workspace.dependencies]
+anyhow = "1"
+async-trait = "0.1"
+clap = { version = "4", features = ["derive", "env"] }
+notify = "8"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "1"
+tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"] }
+toml = "0.8"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+uuid = { version = "1", features = ["serde", "v4"] }

@@ -1,0 +1,2 @@
+# Reserved for Milestone 1. Do not install this file for the 0.1 foundation.
+KERNEL=="uinput", GROUP="input", MODE="0660", TAG+="uaccess"

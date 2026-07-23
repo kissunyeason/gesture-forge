@@ -1,0 +1,7 @@
+/target/
+*.log
+*.swp
+.idea/
+.vscode/
+.DS_Store
+result

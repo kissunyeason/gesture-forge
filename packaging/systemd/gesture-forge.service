@@ -1,0 +1,13 @@
+[Unit]
+Description=GestureForge input automation daemon
+PartOf=graphical-session.target
+After=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/gesture-forged --config %h/.config/gesture-forge/config.toml
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=graphical-session.target
