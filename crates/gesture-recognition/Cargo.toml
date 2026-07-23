@@ -12,3 +12,4 @@ gesture-core = { path = "../gesture-core" }
 gesture-device = { path = "../gesture-device" }
 serde.workspace = true
 toml.workspace = true
+uuid.workspace = true

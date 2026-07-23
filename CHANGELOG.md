@@ -7,7 +7,14 @@
 - keep ordinary holds available until movement actually activates a drag;
 - suppress end-of-session swipe and hold output after a drag claims the session;
 - cancel active drags when finger count, coordinate membership, or required tracking changes;
-- leave pointer/button injection for the fail-safe uinput action stage.
+- add an explicitly enabled, lazily created uinput drag pointer provider;
+- release virtual buttons on end, cancel, emission failure, replacement begin, and provider drop;
+- assign stable drag stream IDs so stale clients cannot release a newer drag;
+- synthesize drag cancellation when a live client disconnects unexpectedly;
+- rebuild security-sensitive action registries on configuration reload and apply permission reductions fail-closed;
+- surface daemon action failures and mismatched replies to the live recognizer client;
+- emit an explicit drag cancel when live or offline recognition abandons an active stream;
+- cancel an unfinished drag before resetting on an unexpected new touch session.
 
 ## 0.4.1 - generic finger-count rules
 

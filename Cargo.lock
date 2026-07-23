@@ -240,6 +240,7 @@ version = "0.5.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "evdev",
  "gesture-core",
  "serde",
  "serde_json",
@@ -313,6 +314,7 @@ dependencies = [
  "gesture-device",
  "serde",
  "toml",
+ "uuid",
 ]
 
 [[package]]

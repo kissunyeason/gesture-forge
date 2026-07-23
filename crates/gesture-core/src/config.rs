@@ -97,6 +97,8 @@ impl Default for RuntimeConfig {
 pub struct SecurityConfig {
     #[serde(default)]
     pub allow_command_actions: bool,
+    #[serde(default)]
+    pub allow_uinput_actions: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

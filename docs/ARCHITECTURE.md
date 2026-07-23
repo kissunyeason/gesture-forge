@@ -31,6 +31,7 @@ Actions are addressed as `<provider>.<action>`, for example:
 
 - `core.log`
 - `process.run`
+- `uinput.drag`
 - future `uinput.key-sequence`
 - future `gnome.show-overview`
 - future `dbus.call`
@@ -62,4 +63,12 @@ state without treating a device-reported count as additional coordinates.
 Continuous drag rules publish `touchpad.drag` begin, update, end, and cancel
 events after a stable hold followed by intentional movement. They still do not
 press buttons, move pointers, or manipulate windows. Those effects belong to
-independent action providers with fail-safe release handling.
+independent action providers. The optional `uinput.drag` provider converts the
+lifecycle into virtual button and relative-pointer events with explicit
+security opt-in and fail-safe release handling. A stable stream ID prevents
+late events from an older client from mutating a newer active drag. The daemon
+tracks drag ownership per socket and synthesizes cancellation on disconnect.
+Security-sensitive provider registries are rebuilt as one runtime state during
+configuration reload. Permission reductions are applied fail-closed even when a
+stale binding still names the provider that was just disabled. Failed reloads
+never grant new action permissions.

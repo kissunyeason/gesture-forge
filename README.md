@@ -19,18 +19,19 @@ observer, multitouch frames, and:
 - live frame inspection plus raw JSON Lines recording and offline replay;
 - simultaneous configurable N-finger swipe and hold rules at touch-session end;
 - opt-in N-finger hold-then-drag recognition with begin/update/end/cancel events;
-- live and offline recognition commands that emit standard `InputEvent` objects.
+- an opt-in uinput action provider for virtual pointer drag events;
+- live and offline recognition commands that emit standard `InputEvent` objects;
+- optional live forwarding from the recognizer to the daemon socket.
 
 Only the built-in three-finger swipe and hold thresholds have been calibrated
 against real samples. Four- and five-finger rules and drag thresholds require
-explicit testing. Drag recognition emits events only; it does not yet inject a
-mouse button or pointer motion.
+explicit testing. Recognition itself remains action-agnostic.
 
 Shared observation remains non-grabbing. Recording and live recognition can opt
 into a temporary `EVIOCGRAB` so GNOME and other clients do not receive test
-gestures. GestureForge still does not create a virtual input device or inject
-input. Hardware proxying, passthrough, drag, tap, pinch, and rotation remain
-later milestones.
+gestures. The optional uinput provider creates a virtual pointer only when
+explicitly enabled and first executed. Full hardware proxying, passthrough,
+tap, pinch, and rotation remain later milestones.
 
 ## Architecture
 
@@ -101,7 +102,27 @@ allow_command_actions = true
 
 The process provider executes an explicit program and argument array without invoking a shell.
 
-Future evdev/uinput access will use narrow udev rules and a dedicated group. GestureForge will not require running its daemon as root.
+Virtual pointer injection is separately disabled by default:
+
+```toml
+[security]
+allow_uinput_actions = true
+```
+
+Enabling the provider does not open `/dev/uinput` during validation. The device
+is created lazily on the first matching action. Production installation should
+use the narrow rule in `packaging/udev/60-gesture-forge-uinput.rules` and a
+dedicated group rather than running the daemon as root. Configuration reloads
+rebuild the provider registry. Disabling a security flag immediately drops the
+old provider and attempts to release any pressed virtual button, even when a
+stale binding still references that now-disabled provider; such a binding fails
+closed until the configuration is corrected. A failed reload never grants a
+new action permission; increases take effect only after full validation.
+
+Each continuous drag carries a stable `recognition.stream_id`. The provider
+uses it to reject stale updates and stale cancellation from older clients. The
+daemon also synthesizes a cancellation if a live recognizer disconnects before
+sending `end` or `cancel`.
 
 ## License
 
@@ -121,6 +142,7 @@ cargo run -p gesture-cli -- record \
 cargo run -p gesture-cli -- replay --input sample.jsonl --json
 cargo run -p gesture-cli -- recognize --input sample.jsonl --json
 cargo run -p gesture-cli -- gestures --device /dev/input/event8 --exclusive
+# With a running daemon, append --dispatch to execute configured actions.
 ```
 
 `monitor` and `frames` never grab the device. `record` is shared by default;

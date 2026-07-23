@@ -24,7 +24,8 @@ install -m644 "$ROOT/packaging/systemd/gesture-forge.service" \
 systemctl --user daemon-reload
 
 echo
-echo "Installed the safe 0.1 foundation."
+echo "Installed GestureForge user binaries and service."
 echo "The service was not enabled or started automatically."
+echo "Optional uinput actions require a separately installed udev rule; see README.md."
 echo "Validate: gesture-forge validate"
 echo "Start manually: systemctl --user start gesture-forge.service"

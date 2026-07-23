@@ -9,8 +9,8 @@ use std::{
 
 use anyhow::{Context, Result};
 use clap::{Args, Parser, Subcommand};
-use gesture_actions::{default_action_registry, default_condition_registry};
-use gesture_core::{Config, Engine, InputEvent};
+use gesture_actions::{default_action_registry_with_security, default_condition_registry};
+use gesture_core::{Config, DispatchReport, Engine, InputEvent};
 use gesture_device::{
     enumerate_devices, DeviceInfo, EvdevObserver, RawInputEvent, TouchFrame, TouchFrameTracker,
 };
@@ -172,6 +172,11 @@ struct GesturesArgs {
     /// Emit one JSON object per recognized gesture.
     #[arg(long)]
     json: bool,
+    /// Forward recognized events to the GestureForge daemon.
+    #[arg(long)]
+    dispatch: bool,
+    #[arg(long, env = "GESTURE_FORGE_SOCKET", default_value_os_t = default_socket_path())]
+    socket: PathBuf,
     /// Stop after this many recognized gestures. Zero means unlimited.
     #[arg(long, default_value_t = 0)]
     limit: usize,
@@ -214,7 +219,10 @@ async fn main() -> Result<()> {
 
 fn validate(args: ConfigArgs) -> Result<()> {
     let config = Config::load(&args.config)?;
-    let actions = default_action_registry(config.security.allow_command_actions)?;
+    let actions = default_action_registry_with_security(
+        config.security.allow_command_actions,
+        config.security.allow_uinput_actions,
+    )?;
     let conditions = default_condition_registry()?;
     let engine = Engine::new(config)?;
     engine.validate_providers(&actions, &conditions)?;
@@ -422,6 +430,11 @@ async fn gestures(args: GesturesArgs) -> Result<()> {
     let config = load_recognizer_config(args.recognizer_config.as_deref())?;
     let mut tracker = TouchFrameTracker::new();
     let mut recognizer = GestureRecognizer::new(config)?;
+    let mut dispatcher = if args.dispatch {
+        Some(DispatchClient::connect(&args.socket).await?)
+    } else {
+        None
+    };
     let mut count = 0usize;
 
     let delivery_mode = if observer.is_exclusive() {
@@ -436,29 +449,147 @@ async fn gestures(args: GesturesArgs) -> Result<()> {
         delivery_mode
     );
 
-    loop {
-        if args.limit > 0 && count >= args.limit {
-            break;
-        }
-
-        let Some(raw_event) = next_raw_event(&mut observer, args.idle_timeout).await? else {
-            break;
-        };
-
-        let Some(frame) = tracker.push(&raw_event) else {
-            continue;
-        };
-
-        for event in recognizer.push(&frame) {
-            print_gesture(&event, args.json)?;
-            count += 1;
+    let run_result: Result<()> = async {
+        loop {
             if args.limit > 0 && count >= args.limit {
                 break;
             }
+
+            let Some(raw_event) = next_raw_event(&mut observer, args.idle_timeout).await? else {
+                break;
+            };
+
+            let Some(frame) = tracker.push(&raw_event) else {
+                continue;
+            };
+
+            for event in recognizer.push(&frame) {
+                deliver_gesture(&event, args.json, dispatcher.as_mut()).await?;
+                count += 1;
+                if args.limit > 0 && count >= args.limit {
+                    break;
+                }
+            }
         }
+        Ok(())
+    }
+    .await;
+
+    let cleanup_result: Result<()> = async {
+        for event in recognizer.cancel() {
+            deliver_gesture(&event, args.json, dispatcher.as_mut()).await?;
+        }
+        Ok(())
+    }
+    .await;
+
+    finish_with_cleanup(run_result, cleanup_result, "live gesture recognition")
+}
+
+async fn deliver_gesture(
+    event: &InputEvent,
+    json: bool,
+    dispatcher: Option<&mut DispatchClient>,
+) -> Result<()> {
+    if let Some(dispatcher) = dispatcher {
+        dispatcher.send(event).await?;
+    }
+    print_gesture(event, json)
+}
+
+struct DispatchClient {
+    writer: tokio::net::unix::OwnedWriteHalf,
+    reader: BufReader<tokio::net::unix::OwnedReadHalf>,
+}
+
+impl DispatchClient {
+    async fn connect(path: &Path) -> Result<Self> {
+        let stream = UnixStream::connect(path)
+            .await
+            .with_context(|| format!("failed to connect to daemon socket {}", path.display()))?;
+        let (reader, writer) = stream.into_split();
+        Ok(Self {
+            writer,
+            reader: BufReader::new(reader),
+        })
     }
 
+    async fn send(&mut self, event: &InputEvent) -> Result<()> {
+        self.writer.write_all(&serde_json::to_vec(event)?).await?;
+        self.writer.write_all(b"\n").await?;
+        self.writer.flush().await?;
+
+        let mut response = String::new();
+        self.reader.read_line(&mut response).await?;
+        if response.trim().is_empty() {
+            anyhow::bail!("daemon closed the dispatch socket without a response");
+        }
+
+        let value: serde_json::Value =
+            serde_json::from_str(&response).context("daemon returned invalid response JSON")?;
+        if let Some(error) = value.get("error").and_then(serde_json::Value::as_str) {
+            anyhow::bail!(
+                "daemon rejected {} {}: {}",
+                event.family,
+                event.phase,
+                error
+            );
+        }
+
+        let report: DispatchReport =
+            serde_json::from_value(value).context("daemon response was not a dispatch report")?;
+        validate_dispatch_report(event, &report)
+    }
+}
+
+fn validate_dispatch_report(event: &InputEvent, report: &DispatchReport) -> Result<()> {
+    if report.event_id != event.id {
+        anyhow::bail!(
+            "daemon response event id {} does not match dispatched event {}",
+            report.event_id,
+            event.id
+        );
+    }
+    if let Some(failure) = dispatch_failure(report) {
+        anyhow::bail!(
+            "daemon action failed for {} {}: {}",
+            event.family,
+            event.phase,
+            failure
+        );
+    }
     Ok(())
+}
+
+fn dispatch_failure(report: &DispatchReport) -> Option<String> {
+    report.bindings.iter().find_map(|binding| {
+        binding.outcomes.iter().find_map(|outcome| {
+            (!outcome.success).then(|| {
+                format!(
+                    "binding {:?}, action {}.{}: {}",
+                    binding.id,
+                    outcome.provider,
+                    outcome.action,
+                    outcome.message.as_deref().unwrap_or("unknown failure")
+                )
+            })
+        })
+    })
+}
+
+fn finish_with_cleanup(
+    run_result: Result<()>,
+    cleanup_result: Result<()>,
+    operation: &str,
+) -> Result<()> {
+    match (run_result, cleanup_result) {
+        (Err(error), Err(cleanup_error)) => Err(error).context(format!(
+            "{operation} failed; drag cleanup also failed: {cleanup_error}"
+        )),
+        (Err(error), Ok(())) => Err(error),
+        (Ok(()), Err(error)) => Err(error).context(format!("{operation} cleanup failed")),
+        (Ok(()), Ok(())) => Ok(()),
+    }
 }
 
 fn replay(args: ReplayArgs) -> Result<()> {
@@ -510,44 +641,54 @@ fn recognize(args: RecognizeArgs) -> Result<()> {
     let mut recognizer = GestureRecognizer::new(config)?;
     let mut count = 0usize;
 
-    for (index, line) in reader.lines().enumerate() {
-        if args.limit > 0 && count >= args.limit {
-            break;
-        }
-
-        let line = line.with_context(|| {
-            format!(
-                "failed to read line {} from {}",
-                index + 1,
-                args.input.display()
-            )
-        })?;
-        if line.trim().is_empty() {
-            continue;
-        }
-
-        let raw_event: RawInputEvent = serde_json::from_str(&line).with_context(|| {
-            format!(
-                "invalid raw event at {}:{}",
-                args.input.display(),
-                index + 1
-            )
-        })?;
-
-        let Some(frame) = tracker.push(&raw_event) else {
-            continue;
-        };
-
-        for event in recognizer.push(&frame) {
-            print_gesture(&event, args.json)?;
-            count += 1;
+    let run_result = (|| -> Result<()> {
+        for (index, line) in reader.lines().enumerate() {
             if args.limit > 0 && count >= args.limit {
                 break;
             }
-        }
-    }
 
-    Ok(())
+            let line = line.with_context(|| {
+                format!(
+                    "failed to read line {} from {}",
+                    index + 1,
+                    args.input.display()
+                )
+            })?;
+            if line.trim().is_empty() {
+                continue;
+            }
+
+            let raw_event: RawInputEvent = serde_json::from_str(&line).with_context(|| {
+                format!(
+                    "invalid raw event at {}:{}",
+                    args.input.display(),
+                    index + 1
+                )
+            })?;
+
+            let Some(frame) = tracker.push(&raw_event) else {
+                continue;
+            };
+
+            for event in recognizer.push(&frame) {
+                print_gesture(&event, args.json)?;
+                count += 1;
+                if args.limit > 0 && count >= args.limit {
+                    break;
+                }
+            }
+        }
+        Ok(())
+    })();
+
+    let cleanup_result = (|| -> Result<()> {
+        for event in recognizer.cancel() {
+            print_gesture(&event, args.json)?;
+        }
+        Ok(())
+    })();
+
+    finish_with_cleanup(run_result, cleanup_result, "offline gesture recognition")
 }
 
 fn load_recognizer_config(path: Option<&Path>) -> Result<RecognizerConfig> {
@@ -715,4 +856,40 @@ fn config_home() -> PathBuf {
         .map(PathBuf::from)
         .or_else(|| env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))
         .unwrap_or_else(|| PathBuf::from(".config"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gesture_core::{ActionOutcome, BindingReport};
+
+    #[test]
+    fn rejects_failed_daemon_actions() {
+        let event = InputEvent::new("test", "end");
+        let report = DispatchReport {
+            event_id: event.id,
+            bindings: vec![BindingReport {
+                id: "drag".to_owned(),
+                outcomes: vec![ActionOutcome {
+                    provider: "uinput".to_owned(),
+                    action: "drag".to_owned(),
+                    success: false,
+                    message: Some("permission denied".to_owned()),
+                }],
+            }],
+        };
+        let error = validate_dispatch_report(&event, &report).unwrap_err();
+        assert!(error.to_string().contains("permission denied"));
+    }
+
+    #[test]
+    fn rejects_a_response_for_a_different_event() {
+        let event = InputEvent::new("test", "end");
+        let report = DispatchReport {
+            event_id: InputEvent::new("other", "end").id,
+            bindings: Vec::new(),
+        };
+        let error = validate_dispatch_report(&event, &report).unwrap_err();
+        assert!(error.to_string().contains("does not match"));
+    }
 }

@@ -62,3 +62,64 @@ level = "info"
 ```
 
 Supported error policies are `continue`, `stop-binding`, and `stop-dispatch`.
+
+## Continuous virtual pointer drag
+
+The uinput provider is opt-in:
+
+```toml
+[security]
+allow_uinput_actions = true
+```
+
+Bind every drag lifecycle phase to the same action. An empty `phases` list
+matches begin, update, end, and cancel; omitting release phases can leave a
+button pressed until the provider's emergency cleanup runs.
+
+```toml
+[[bindings]]
+id = "three-finger-pointer-drag"
+enabled = true
+priority = 200
+consume = true
+
+[bindings.trigger]
+family = "touchpad.drag"
+phases = []
+fingers = [3]
+
+[bindings.trigger.labels]
+"recognition.rule_id" = "three-finger-drag"
+
+[[bindings.actions]]
+provider = "uinput"
+action = "drag"
+on_error = "stop-dispatch"
+
+[bindings.actions.params]
+button = "left"
+scale = 0.5
+max_delta = 200
+```
+
+Supported buttons are `left`, `middle`, and `right`. `scale` converts touchpad
+coordinate deltas into relative pointer movement. `max_delta` limits a single
+emitted axis step. The provider creates `/dev/uinput` lazily, attempts emergency
+release after emission errors, and releases all virtual buttons when dropped.
+
+Continuous drag events include a stable `recognition.stream_id`. Duplicate
+events are idempotent, updates from a different stream are rejected, and stale
+`end`/`cancel` events cannot release the active stream. If a live dispatch client
+disconnects unexpectedly, the daemon synthesizes a matching cancel event.
+
+For controlled testing, run live recognition with both `--exclusive` and
+`--dispatch`. Shared mode still allows the compositor to process the physical
+touchpad while GestureForge injects virtual pointer motion.
+
+The security flags are applied again during configuration reload. The daemon
+rebuilds the action registry instead of retaining a provider that a newly loaded
+configuration has disabled. If a stricter reload still contains a binding for a
+disabled provider, the restriction is applied immediately and that binding fails
+closed until it is removed or the provider is explicitly re-enabled. A failed
+reload may reduce permissions, but it never grants a permission that was not
+already active; permission increases require full provider validation.

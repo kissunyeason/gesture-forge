@@ -100,8 +100,14 @@ cargo run -p gesture-cli -- gestures \
 ```
 
 `gestures` is shared by default. `--exclusive` temporarily blocks other clients
-from receiving touchpad events and is intended for controlled testing until a
-fail-open uinput proxy exists.
+from receiving touchpad events and is intended for controlled testing.
+
+Add `--dispatch` (and optionally `--socket PATH`) to forward each recognized
+event to a running daemon. The daemon remains responsible for configuration,
+security checks, and action execution. The CLI treats unsuccessful action
+outcomes as errors instead of accepting any syntactically valid daemon reply.
+For pointer-drag testing, combine `--dispatch` with `--exclusive` so the desktop
+does not process the physical gesture at the same time.
 
 The generic rule syntax is:
 
@@ -179,3 +185,10 @@ require_complete_tracking = true
 disabled by default and their example thresholds are not calibrated. The
 recognizer does not inject pointer movement or mouse buttons; consumers must
 also treat both `end` and `cancel` as mandatory release signals.
+
+The live and offline CLI commands explicitly cancel an active drag before
+returning because of Ctrl+C, idle timeout, event limit, input EOF, or another
+processing error. Every drag lifecycle carries a stable
+`recognition.stream_id`; action providers use it to reject stale events. The
+daemon additionally synthesizes a matching cancel if a dispatch client exits or
+loses its socket before completing the lifecycle.

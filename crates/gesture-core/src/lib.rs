@@ -9,7 +9,7 @@ pub use config::{
     ActionSpec, Binding, ConditionSpec, Config, ErrorPolicy, RuntimeConfig, SecurityConfig,
     TriggerPattern,
 };
-pub use engine::{DispatchPlan, Engine};
+pub use engine::{BindingReport, DispatchPlan, DispatchReport, Engine};
 pub use event::{EventContext, InputEvent};
 pub use provider::{
     ActionOutcome, ActionProvider, ActionRegistry, ConditionProvider, ConditionRegistry,

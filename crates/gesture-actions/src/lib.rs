@@ -1,5 +1,7 @@
 //! Built-in action and condition providers.
 
+mod uinput_pointer;
+
 use anyhow::{bail, Context, Result};
 use async_trait::async_trait;
 use gesture_core::{
@@ -10,11 +12,23 @@ use serde::Deserialize;
 use tokio::process::Command;
 use tracing::{debug, error, info, warn};
 
+pub use uinput_pointer::UinputPointerProvider;
+
 pub fn default_action_registry(allow_commands: bool) -> Result<ActionRegistry> {
+    default_action_registry_with_security(allow_commands, false)
+}
+
+pub fn default_action_registry_with_security(
+    allow_commands: bool,
+    allow_uinput: bool,
+) -> Result<ActionRegistry> {
     let mut registry = ActionRegistry::default();
     registry.register(CoreActionProvider)?;
     if allow_commands {
         registry.register(ProcessActionProvider)?;
+    }
+    if allow_uinput {
+        registry.register(UinputPointerProvider::new())?;
     }
     Ok(registry)
 }
@@ -193,5 +207,29 @@ impl ConditionProvider for CoreConditionProvider {
             }
             _ => unreachable!("validated above"),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gesture_core::{ActionSpec, ErrorPolicy};
+
+    fn uinput_drag_spec() -> ActionSpec {
+        ActionSpec {
+            provider: "uinput".to_owned(),
+            action: "drag".to_owned(),
+            params: serde_json::json!({}),
+            on_error: ErrorPolicy::Continue,
+        }
+    }
+
+    #[test]
+    fn uinput_provider_requires_explicit_registry_opt_in() {
+        let disabled = default_action_registry_with_security(false, false).unwrap();
+        assert!(disabled.validate(&uinput_drag_spec()).is_err());
+
+        let enabled = default_action_registry_with_security(false, true).unwrap();
+        enabled.validate(&uinput_drag_spec()).unwrap();
     }
 }

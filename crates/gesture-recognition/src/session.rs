@@ -4,6 +4,7 @@ use anyhow::Result;
 use gesture_core::InputEvent;
 use gesture_device::{TouchFrame, TouchFramePhase, TouchPoint};
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 use crate::{DragRuleConfig, RecognizerConfig};
 
@@ -48,32 +49,55 @@ impl GestureRecognizer {
         &self.config
     }
 
+    /// Cancel any in-progress continuous gesture and reset the current session.
+    ///
+    /// Callers should invoke this before shutting down or abandoning an input
+    /// stream so downstream stateful actions always receive a release signal.
+    pub fn cancel(&mut self) -> Vec<InputEvent> {
+        let events = self
+            .active_drag
+            .take()
+            .map(|mut active| active.finish_event("cancel", None))
+            .into_iter()
+            .collect();
+        self.session.clear();
+        self.drag_candidate = None;
+        self.session_claimed = false;
+        events
+    }
+
     /// Consume one normalized touch frame and return zero or more action-agnostic
     /// gesture events. Swipes and holds are classified at session end; drag
     /// rules publish a continuous begin/update/end/cancel lifecycle.
     pub fn push(&mut self, frame: &TouchFrame) -> Vec<InputEvent> {
+        let mut reset_events = Vec::new();
         if frame.phase == TouchFramePhase::Begin {
+            if let Some(mut active) = self.active_drag.take() {
+                reset_events.push(active.finish_event("cancel", frame.timestamp_micros));
+            }
             self.session.clear();
             self.drag_candidate = None;
-            self.active_drag = None;
             self.session_claimed = false;
         }
 
         if self.session.is_empty() && frame.fingers == 0 {
-            return Vec::new();
+            return reset_events;
         }
 
         self.session.push(frame.clone());
-        let drag_events = self.update_drag(frame);
+        let mut drag_events = self.update_drag(frame);
+        reset_events.append(&mut drag_events);
 
         if frame.phase != TouchFramePhase::End {
-            return drag_events;
+            return reset_events;
         }
 
         let events = if self.session_claimed {
-            drag_events
+            reset_events
         } else {
-            self.classify_completed_session()
+            let mut events = reset_events;
+            events.extend(self.classify_completed_session());
+            events
         };
         self.session.clear();
         self.drag_candidate = None;
@@ -304,6 +328,7 @@ impl DragCandidate {
 #[derive(Debug)]
 struct ActiveDrag {
     rule_id: String,
+    stream_id: String,
     fingers: u8,
     require_complete_tracking: bool,
     origin: TouchPoint,
@@ -328,8 +353,10 @@ impl ActiveDrag {
         contact_ids: Vec<(u16, i32)>,
         tracking_complete: bool,
     ) -> Self {
+        let stream_id = Uuid::new_v4().to_string();
         Self {
             rule_id: rule.id.clone(),
+            stream_id,
             fingers: rule.fingers,
             require_complete_tracking: rule.require_complete_tracking,
             origin,
@@ -399,6 +426,9 @@ impl ActiveDrag {
         event
             .labels
             .insert("recognition.rule_id".to_owned(), self.rule_id.clone());
+        event
+            .labels
+            .insert("recognition.stream_id".to_owned(), self.stream_id.clone());
         event.labels.insert(
             "tracking_complete".to_owned(),
             self.tracking_complete.to_string(),
@@ -1040,12 +1070,71 @@ mod tests {
         assert_eq!(update[0].values.get("dx"), Some(&18.0));
         assert_eq!(update[0].values.get("dy"), Some(&5.0));
         assert_eq!(update[0].values.get("total_dx"), Some(&28.0));
+        let stream_id = begin[0]
+            .labels
+            .get("recognition.stream_id")
+            .expect("drag begin should expose a stable stream id");
+        assert_eq!(
+            update[0].labels.get("recognition.stream_id"),
+            Some(stream_id)
+        );
 
         let end = recognizer.push(&frame(6, 600, TouchFramePhase::End, 0, None));
         assert_eq!(end.len(), 1);
         assert_eq!(end[0].family, "touchpad.drag");
         assert_eq!(end[0].phase, "end");
         assert_eq!(end[0].values.get("total_dx"), Some(&28.0));
+        assert_eq!(end[0].labels.get("recognition.stream_id"), Some(stream_id));
+    }
+
+    #[test]
+    fn a_new_begin_cancels_an_unfinished_drag_before_resetting() {
+        let mut config = RecognizerConfig::default();
+        config.recognition.drags = vec![three_finger_drag_rule()];
+        let mut recognizer = GestureRecognizer::new(config).unwrap();
+
+        let _ = recognizer.push(&frame(
+            1,
+            0,
+            TouchFramePhase::Begin,
+            3,
+            Some((100.0, 100.0)),
+        ));
+        let _ = recognizer.push(&frame(
+            2,
+            350,
+            TouchFramePhase::Update,
+            3,
+            Some((100.0, 100.0)),
+        ));
+        let begin = recognizer.push(&frame(
+            3,
+            400,
+            TouchFramePhase::Update,
+            3,
+            Some((110.0, 100.0)),
+        ));
+        let stream_id = begin[0]
+            .labels
+            .get("recognition.stream_id")
+            .cloned()
+            .expect("drag begin should expose its stream id");
+
+        let reset = recognizer.push(&frame(
+            4,
+            500,
+            TouchFramePhase::Begin,
+            1,
+            Some((200.0, 200.0)),
+        ));
+        assert_eq!(reset.len(), 1);
+        assert_eq!(reset[0].family, "touchpad.drag");
+        assert_eq!(reset[0].phase, "cancel");
+        assert_eq!(
+            reset[0].labels.get("recognition.stream_id"),
+            Some(&stream_id)
+        );
+        assert!(recognizer.cancel().is_empty());
     }
 
     #[test]
@@ -1216,5 +1305,42 @@ mod tests {
                 .map(String::as_str),
             Some("four-finger-drag")
         );
+    }
+
+    #[test]
+    fn explicit_cancel_releases_active_drag_and_resets_session() {
+        let mut config = RecognizerConfig::default();
+        config.recognition.drags = vec![three_finger_drag_rule()];
+        let mut recognizer = GestureRecognizer::new(config).unwrap();
+        let _ = recognizer.push(&frame(
+            1,
+            0,
+            TouchFramePhase::Begin,
+            3,
+            Some((100.0, 100.0)),
+        ));
+        let _ = recognizer.push(&frame(
+            2,
+            350,
+            TouchFramePhase::Update,
+            3,
+            Some((100.0, 100.0)),
+        ));
+        let begin = recognizer.push(&frame(
+            3,
+            400,
+            TouchFramePhase::Update,
+            3,
+            Some((110.0, 100.0)),
+        ));
+        assert_eq!(begin[0].phase, "begin");
+
+        let cancel = recognizer.cancel();
+        assert_eq!(cancel.len(), 1);
+        assert_eq!(cancel[0].phase, "cancel");
+        assert!(recognizer.cancel().is_empty());
+        assert!(recognizer
+            .push(&frame(4, 450, TouchFramePhase::End, 0, None))
+            .is_empty());
     }
 }

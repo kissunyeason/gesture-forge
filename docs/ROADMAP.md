@@ -17,7 +17,8 @@
 - [x] backward-compatible generic N-finger swipe and hold rule lists;
 - [x] continuous hold-then-drag recognition lifecycle;
 - tap, pinch, and rotate recognizers;
-- fail-safe uinput keyboard and pointer provider;
+- [x] guarded uinput pointer provider for drag lifecycles;
+- fail-safe uinput keyboard provider;
 - passthrough policy for unclaimed events.
 
 ## Milestone 2 - useful actions and context

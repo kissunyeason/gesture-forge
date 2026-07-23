@@ -6,6 +6,7 @@ log_level = "info"
 
 [security]
 allow_command_actions = false
+allow_uinput_actions = false
 
 # This example is intentionally harmless. It demonstrates that a trigger and
 # an action are separate configuration objects. Replace or add action providers
