@@ -1,4 +1,4 @@
-# Evdev observer and exclusive recorder
+# Evdev observer, exclusive recorder, and touchpad proxy
 
 GestureForge provides shared device discovery and raw event observation.
 GestureForge 0.3.1 also adds an explicit exclusive mode for sample recording.
@@ -29,6 +29,32 @@ produces JSON Lines suitable for later recorder/replayer work.
 An existing program that has exclusively grabbed the physical touchpad can
 prevent the observer from receiving events. Stop that program temporarily or
 observe its virtual touchpad instead. Discovery itself remains safe.
+
+## Experimental selective passthrough
+
+Live recognition can exclusively grab the physical touchpad while preserving
+normal one- and two-finger desktop input through a uinput clone:
+
+```bash
+cargo run -p gesture-cli -- gestures \
+  --device /dev/input/event8 \
+  --exclusive \
+  --passthrough \
+  --exclusive-timeout 120
+```
+
+The proxy buffers each physical frame until `SYN_REPORT`. Frames with at most
+two fingers are replayed to `GestureForge Virtual Touchpad`. When a third finger
+appears, any virtual contacts already exposed to the desktop are explicitly
+ended and the remainder of that physical session is consumed until all fingers
+are lifted. This prevents the compositor from receiving a three-finger stream
+while keeping pointer movement and two-finger scrolling available.
+
+The virtual device copies the selected device's key set, absolute-axis metadata,
+input ID, and input properties. `/dev/uinput` permission is therefore required.
+The implementation is intentionally experimental and currently targets
+protocol-B clickpads with `ABS_X/Y`, MT slots, MT positions, tracking IDs,
+`INPUT_PROP_POINTER`, and `INPUT_PROP_BUTTONPAD`.
 
 ## Architectural role
 

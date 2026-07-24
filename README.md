@@ -20,6 +20,7 @@ observer, multitouch frames, and:
 - simultaneous configurable N-finger swipe and hold rules at touch-session end;
 - opt-in N-finger hold-then-drag recognition with begin/update/end/cancel events;
 - an opt-in uinput action provider for virtual pointer drag events;
+- an experimental exclusive virtual-touchpad proxy that forwards one/two fingers and consumes three-or-more;
 - live and offline recognition commands that emit standard `InputEvent` objects;
 - optional live forwarding from the recognizer to the daemon socket.
 
@@ -33,8 +34,11 @@ gestures. Exclusive CLI sessions now explicitly ungrab before shutdown cleanup,
 watch `SIGINT`, `SIGTERM`, and terminal hangup, stop when their launching
 terminal process disappears, and enforce a 120-second total grab limit by
 default. The optional uinput provider creates a virtual pointer only when
-explicitly enabled and first executed. Full hardware proxying, passthrough,
-tap, pinch, and rotation remain later milestones.
+explicitly enabled and first executed. `gestures --exclusive --passthrough`
+clones the selected touchpad into uinput, forwards complete one- and two-finger
+frames, and withholds three-or-more-finger sessions from the desktop. This proxy
+is experimental; generic hardware support, tap, pinch, and rotation remain
+later milestones.
 
 ## Architecture
 
@@ -47,7 +51,7 @@ physical input -> backend -> normalized event -> matcher -> conditions
 
 - `gesture-core`: event schema, configuration, validation, matching, provider APIs.
 - `gesture-actions`: independently registered action providers.
-- `gesture-device`: evdev discovery, raw observation, protocol-B frame tracking, and backend interfaces.
+- `gesture-device`: evdev discovery, raw observation, protocol-B frame tracking, exclusive touchpad proxying, and backend interfaces.
 - `gesture-recognition`: configurable frame-to-event recognition without actions.
 - `gesture-daemon`: configuration reload, event socket, dispatch.
 - `gesture-cli`: validate configs, inspect devices, record/replay input, and inject simulations.
@@ -148,6 +152,7 @@ cargo run -p gesture-cli -- recognize --input sample.jsonl --json
 cargo run -p gesture-cli -- gestures \
   --device /dev/input/event8 \
   --exclusive \
+  --passthrough \
   --exclusive-timeout 120
 # With a running daemon, append --dispatch to execute configured actions.
 ```
@@ -156,6 +161,9 @@ cargo run -p gesture-cli -- gestures \
 add `--exclusive` (alias `--grab`) when collecting gesture samples so desktop
 gestures are temporarily blocked. The grab ends on normal return, `Ctrl+C`,
 `SIGTERM`, terminal hangup, launching-process exit, the exclusive timeout, or
-process drop. If a test terminal is lost, `pkill -TERM -x gesture-forge` remains
-the manual recovery command. See
+process drop. `--passthrough` requires `--exclusive`: it exposes one- and
+two-finger frames through `GestureForge Virtual Touchpad`, terminates that
+virtual contact stream when a third finger appears, and suppresses the physical
+session until every finger is lifted. If a test terminal is lost,
+`pkill -TERM -x gesture-forge` remains the manual recovery command. See
 [the observer documentation](docs/DEVICE_OBSERVER.md).

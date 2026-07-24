@@ -17,7 +17,8 @@
 - cancel an unfinished drag before resetting on an unexpected new touch session.
 - release `EVIOCGRAB` before drag/output cleanup and again from `Drop` as a fallback;
 - stop exclusive sessions on interrupt, termination, terminal hangup, or launching-process exit;
-- bound exclusive CLI sessions to 120 seconds by default and time out daemon acknowledgements.
+- bound exclusive CLI sessions to 120 seconds by default and time out daemon acknowledgements;
+- add an experimental virtual-touchpad clone that forwards one/two fingers and consumes three-or-more-finger sessions.
 
 ## 0.4.1 - generic finger-count rules
 

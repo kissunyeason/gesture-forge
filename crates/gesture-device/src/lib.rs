@@ -1,11 +1,12 @@
 //! Hardware abstraction boundary.
 //!
-//! Device discovery and the observer are deliberately read-only. Exclusive
-//! proxying, uinput cloning, and recognizers will be implemented behind these
-//! contracts in later milestones, keeping gestures independent from actions.
+//! Device discovery, raw observation, touch-frame normalization, and the
+//! exclusive virtual-touchpad proxy live behind this crate boundary, keeping
+//! gesture recognition independent from Linux input plumbing.
 
 mod evdev_observer;
 mod touch_frame;
+mod touchpad_passthrough;
 
 use anyhow::Result;
 use async_trait::async_trait;
@@ -17,6 +18,7 @@ pub use evdev_observer::{
     RawInputEvent,
 };
 pub use touch_frame::{TouchContact, TouchFrame, TouchFramePhase, TouchFrameTracker, TouchPoint};
+pub use touchpad_passthrough::TouchpadPassthrough;
 
 #[derive(Debug, Clone, Default)]
 pub struct BackendCapabilities {

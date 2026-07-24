@@ -14,6 +14,7 @@ use gesture_actions::{default_action_registry_with_security, default_condition_r
 use gesture_core::{Config, DispatchReport, Engine, InputEvent};
 use gesture_device::{
     enumerate_devices, DeviceInfo, EvdevObserver, RawInputEvent, TouchFrame, TouchFrameTracker,
+    TouchpadPassthrough,
 };
 use gesture_recognition::{GestureRecognizer, RecognizerConfig};
 use tokio::{
@@ -179,6 +180,9 @@ struct GesturesArgs {
     /// Maximum total seconds to hold an exclusive grab.
     #[arg(long, default_value_t = DEFAULT_EXCLUSIVE_TIMEOUT_SECONDS)]
     exclusive_timeout: u64,
+    /// Replay one- and two-finger input through a virtual touchpad while consuming three-or-more-finger sessions.
+    #[arg(long, requires = "exclusive")]
+    passthrough: bool,
     /// Optional recognizer TOML. Built-in compatible defaults are used when omitted.
     #[arg(long, env = "GESTURE_FORGE_RECOGNIZER_CONFIG")]
     recognizer_config: Option<PathBuf>,
@@ -475,6 +479,11 @@ async fn gestures(args: GesturesArgs) -> Result<()> {
         None
     };
     let mut shutdown = ShutdownMonitor::new(args.exclusive, args.exclusive_timeout)?;
+    let mut passthrough = if args.passthrough {
+        Some(TouchpadPassthrough::open(&args.device)?)
+    } else {
+        None
+    };
     let mut observer = if args.exclusive {
         EvdevObserver::open_exclusive(&args.device)?
     } else {
@@ -482,7 +491,9 @@ async fn gestures(args: GesturesArgs) -> Result<()> {
     };
     let mut count = 0usize;
 
-    let delivery_mode = if observer.is_exclusive() {
+    let delivery_mode = if passthrough.is_some() {
+        "exclusive proxy mode; one/two fingers are forwarded and three-or-more are consumed"
+    } else if observer.is_exclusive() {
         "exclusive mode; desktop gestures are temporarily blocked"
     } else {
         "shared mode; desktop gestures may still run"
@@ -507,6 +518,10 @@ async fn gestures(args: GesturesArgs) -> Result<()> {
                 break;
             };
 
+            if let Some(passthrough) = passthrough.as_mut() {
+                passthrough.push(&raw_event)?;
+            }
+
             let Some(frame) = tracker.push(&raw_event) else {
                 continue;
             };
@@ -523,9 +538,19 @@ async fn gestures(args: GesturesArgs) -> Result<()> {
     }
     .await;
 
-    // Restore the physical touchpad before any socket-based drag cleanup can
-    // block. Drop will retry if this explicit release fails.
-    let release_result = observer.release_grab();
+    // End any virtual contacts before restoring the physical touchpad. Both
+    // operations are local and must complete before socket-based drag cleanup.
+    let passthrough_release_result = passthrough
+        .as_mut()
+        .map(TouchpadPassthrough::release_all)
+        .unwrap_or(Ok(()));
+    let grab_release_result = observer.release_grab();
+    let release_result = finish_with_secondary(
+        passthrough_release_result,
+        grab_release_result,
+        "live gesture recognition",
+        "physical grab release",
+    );
 
     let cleanup_result: Result<()> = async {
         for event in recognizer.cancel() {

@@ -11,7 +11,7 @@
 
 - [x] read-only evdev discovery and device selection;
 - [x] raw diagnostic observer with JSON Lines output;
-- uinput clone and fail-open cleanup;
+- [x] experimental uinput touchpad clone and fail-open cleanup;
 - [x] raw multitouch frame recorder/replayer;
 - [x] configurable three-finger swipe and hold recognizers;
 - [x] backward-compatible generic N-finger swipe and hold rule lists;
@@ -19,7 +19,8 @@
 - tap, pinch, and rotate recognizers;
 - [x] guarded uinput pointer provider for drag lifecycles;
 - fail-safe uinput keyboard provider;
-- passthrough policy for unclaimed events.
+- [x] initial one/two-finger passthrough with three-or-more-finger interception;
+- generalized passthrough policy for arbitrary unclaimed events.
 
 ## Milestone 2 - useful actions and context
 
