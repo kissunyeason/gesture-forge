@@ -19,7 +19,7 @@ observer, multitouch frames, and:
 - live frame inspection plus raw JSON Lines recording and offline replay;
 - simultaneous configurable N-finger swipe and hold rules at touch-session end;
 - opt-in N-finger hold-then-drag recognition with begin/update/end/cancel events;
-- an opt-in uinput action provider for virtual pointer drag events;
+- an opt-in uinput action provider for virtual pointer drags and keyboard chords;
 - an experimental exclusive virtual-touchpad proxy that forwards one/two fingers and consumes three-or-more;
 - live and offline recognition commands that emit standard `InputEvent` objects;
 - optional live forwarding from the recognizer to the daemon socket.
@@ -33,8 +33,8 @@ into a temporary `EVIOCGRAB` so GNOME and other clients do not receive test
 gestures. Exclusive CLI sessions now explicitly ungrab before shutdown cleanup,
 watch `SIGINT`, `SIGTERM`, and terminal hangup, stop when their launching
 terminal process disappears, and enforce a 120-second total grab limit by
-default. The optional uinput provider creates a virtual pointer only when
-explicitly enabled and first executed. `gestures --exclusive --passthrough`
+default. The optional uinput provider creates virtual pointer and keyboard
+devices only when explicitly enabled and first executed. `gestures --exclusive --passthrough`
 clones the selected touchpad into uinput, forwards complete one- and two-finger
 frames, and withholds three-or-more-finger sessions from the desktop. This proxy
 is experimental; generic hardware support, tap, pinch, and rotation remain
@@ -109,7 +109,7 @@ allow_command_actions = true
 
 The process provider executes an explicit program and argument array without invoking a shell.
 
-Virtual pointer injection is separately disabled by default:
+Virtual input injection is separately disabled by default:
 
 ```toml
 [security]
@@ -121,10 +121,16 @@ is created lazily on the first matching action. Production installation should
 use the narrow rule in `packaging/udev/60-gesture-forge-uinput.rules` and a
 dedicated group rather than running the daemon as root. Configuration reloads
 rebuild the provider registry. Disabling a security flag immediately drops the
-old provider and attempts to release any pressed virtual button, even when a
-stale binding still references that now-disabled provider; such a binding fails
+old provider and attempts to release any pressed virtual button or key, even
+when a stale binding still references that now-disabled provider; such a binding fails
 closed until the configuration is corrected. A failed reload never grants a
 new action permission; increases take effect only after full validation.
+
+
+The same provider exposes `uinput.key-chord`. Its `keys` parameter accepts up to
+eight Linux `KEY_*` names below the button-code range. Keys are pressed in the
+configured order, released in reverse order, and released again during provider
+cleanup if an emission fails.
 
 Each continuous drag carries a stable `recognition.stream_id`. The provider
 uses it to reject stale updates and stale cancellation from older clients. The

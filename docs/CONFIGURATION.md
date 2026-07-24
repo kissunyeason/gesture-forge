@@ -112,6 +112,38 @@ events are idempotent, updates from a different stream are rejected, and stale
 `end`/`cancel` events cannot release the active stream. If a live dispatch client
 disconnects unexpectedly, the daemon synthesizes a matching cancel event.
 
+
+## Virtual keyboard chord
+
+The same `allow_uinput_actions` permission enables `uinput.key-chord`:
+
+```toml
+[[bindings]]
+id = "three-finger-swipe-left"
+enabled = true
+priority = 190
+consume = true
+
+[bindings.trigger]
+family = "touchpad.swipe"
+phases = ["end"]
+fingers = [3]
+directions = ["left"]
+
+[[bindings.actions]]
+provider = "uinput"
+action = "key-chord"
+on_error = "stop-dispatch"
+
+[bindings.actions.params]
+keys = ["KEY_LEFTMETA", "KEY_PAGEDOWN"]
+```
+
+`keys` accepts one to eight distinct Linux `KEY_*` names whose numeric codes
+are below the button range. The provider presses keys in listed order, releases
+them in reverse order, creates the virtual keyboard lazily, and attempts an
+emergency release after output failures and when the provider is dropped.
+
 For controlled testing, run live recognition with both `--exclusive` and
 `--dispatch`. Shared mode still allows the compositor to process the physical
 touchpad while GestureForge injects virtual pointer motion.

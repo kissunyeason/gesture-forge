@@ -9,16 +9,20 @@ use evdev::{
 use gesture_core::{ActionOutcome, ActionProvider, ActionSpec, InputEvent};
 use serde::Deserialize;
 
+use crate::uinput_keyboard::{parse_key_chord, UinputKeyboardRuntime};
+
 const DEVICE_NAME: &str = "GestureForge Virtual Pointer";
 
 pub struct UinputPointerProvider {
     runtime: Mutex<PointerRuntime>,
+    keyboard: Mutex<UinputKeyboardRuntime>,
 }
 
 impl UinputPointerProvider {
     pub fn new() -> Self {
         Self {
             runtime: Mutex::new(PointerRuntime::default()),
+            keyboard: Mutex::new(UinputKeyboardRuntime::default()),
         }
     }
 }
@@ -34,6 +38,9 @@ impl Drop for UinputPointerProvider {
         if let Ok(runtime) = self.runtime.get_mut() {
             let _ = runtime.release_all_buttons();
         }
+        if let Ok(keyboard) = self.keyboard.get_mut() {
+            let _ = keyboard.release_all_keys();
+        }
     }
 }
 
@@ -44,15 +51,28 @@ impl ActionProvider for UinputPointerProvider {
     }
 
     fn validate(&self, spec: &ActionSpec) -> Result<()> {
-        if spec.action != "drag" {
-            bail!("unknown uinput action {:?}", spec.action);
+        match spec.action.as_str() {
+            "drag" => {
+                let params = parse_params(spec)?;
+                params.validate()
+            }
+            "key-chord" => parse_key_chord(spec).map(|_| ()),
+            other => bail!("unknown uinput action {other:?}"),
         }
-        let params = parse_params(spec)?;
-        params.validate()
     }
 
     async fn execute(&self, spec: &ActionSpec, event: &InputEvent) -> Result<ActionOutcome> {
         self.validate(spec)?;
+        match spec.action.as_str() {
+            "drag" => self.execute_drag(spec, event),
+            "key-chord" => self.execute_key_chord(spec),
+            _ => unreachable!("validated above"),
+        }
+    }
+}
+
+impl UinputPointerProvider {
+    fn execute_drag(&self, spec: &ActionSpec, event: &InputEvent) -> Result<ActionOutcome> {
         if event.family != "touchpad.drag" {
             bail!(
                 "uinput.drag requires touchpad.drag events, received {:?}",
@@ -89,6 +109,19 @@ impl ActionProvider for UinputPointerProvider {
                 "virtual pointer handled drag phase {}",
                 event.phase
             )),
+        ))
+    }
+
+    fn execute_key_chord(&self, spec: &ActionSpec) -> Result<ActionOutcome> {
+        let chord = parse_key_chord(spec)?;
+        let mut keyboard = self
+            .keyboard
+            .lock()
+            .map_err(|_| anyhow::anyhow!("uinput keyboard state lock was poisoned"))?;
+        keyboard.tap_chord(&chord.keys, chord.hold)?;
+        Ok(ActionOutcome::success(
+            spec,
+            Some("virtual keyboard sent key chord".to_owned()),
         ))
     }
 }

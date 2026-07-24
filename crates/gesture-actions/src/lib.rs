@@ -1,5 +1,6 @@
 //! Built-in action and condition providers.
 
+mod uinput_keyboard;
 mod uinput_pointer;
 
 use anyhow::{bail, Context, Result};
@@ -224,12 +225,25 @@ mod tests {
         }
     }
 
+    fn uinput_key_chord_spec() -> ActionSpec {
+        ActionSpec {
+            provider: "uinput".to_owned(),
+            action: "key-chord".to_owned(),
+            params: serde_json::json!({
+                "keys": ["KEY_LEFTMETA", "KEY_PAGEUP"]
+            }),
+            on_error: ErrorPolicy::Continue,
+        }
+    }
+
     #[test]
     fn uinput_provider_requires_explicit_registry_opt_in() {
         let disabled = default_action_registry_with_security(false, false).unwrap();
         assert!(disabled.validate(&uinput_drag_spec()).is_err());
+        assert!(disabled.validate(&uinput_key_chord_spec()).is_err());
 
         let enabled = default_action_registry_with_security(false, true).unwrap();
         enabled.validate(&uinput_drag_spec()).unwrap();
+        enabled.validate(&uinput_key_chord_spec()).unwrap();
     }
 }

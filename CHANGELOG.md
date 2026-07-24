@@ -8,6 +8,7 @@
 - suppress end-of-session swipe and hold output after a drag claims the session;
 - cancel active drags when finger count, coordinate membership, or required tracking changes;
 - add an explicitly enabled, lazily created uinput drag pointer provider;
+- add a bounded `uinput.key-chord` action with fail-safe reverse-order key release;
 - release virtual buttons on end, cancel, emission failure, replacement begin, and provider drop;
 - assign stable drag stream IDs so stale clients cannot release a newer drag;
 - synthesize drag cancellation when a live client disconnects unexpectedly;
