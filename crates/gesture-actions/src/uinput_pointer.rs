@@ -354,10 +354,12 @@ struct PointerRuntime {
 
 impl PointerRuntime {
     fn emit(&mut self, commands: &[PointerCommand]) -> Result<()> {
-        let events: Vec<_> = commands.iter().flat_map(command_events).collect();
-        self.device()?
-            .emit(&events)
-            .context("failed to emit virtual pointer events")
+        for events in command_event_packets(commands) {
+            self.device()?
+                .emit(&events)
+                .context("failed to emit virtual pointer command frame")?;
+        }
+        Ok(())
     }
 
     fn device(&mut self) -> Result<&mut VirtualDevice> {
@@ -396,6 +398,14 @@ fn create_virtual_pointer() -> Result<VirtualDevice> {
         .context("failed to create virtual pointer")
 }
 
+fn command_event_packets(commands: &[PointerCommand]) -> Vec<Vec<EvdevInputEvent>> {
+    commands
+        .iter()
+        .map(command_events)
+        .filter(|events| !events.is_empty())
+        .collect()
+}
+
 fn command_events(command: &PointerCommand) -> Vec<EvdevInputEvent> {
     match *command {
         PointerCommand::Button { button, down } => vec![EvdevInputEvent::new_now(
@@ -429,6 +439,28 @@ mod tests {
             .labels
             .insert("recognition.stream_id".to_owned(), stream_id.to_owned());
         event
+    }
+
+    #[test]
+    fn button_press_and_initial_motion_are_separate_uinput_frames() {
+        let commands = [
+            PointerCommand::Button {
+                button: MouseButton::Left,
+                down: true,
+            },
+            PointerCommand::Move { x: 5, y: -2 },
+        ];
+        let packets = command_event_packets(&commands);
+
+        assert_eq!(packets.len(), 2);
+        assert_eq!(packets[0].len(), 1);
+        assert_eq!(packets[0][0].event_type(), EventType::KEY);
+        assert_eq!(packets[0][0].code(), KeyCode::BTN_LEFT.code());
+        assert_eq!(packets[0][0].value(), 1);
+        assert_eq!(packets[1].len(), 2);
+        assert!(packets[1]
+            .iter()
+            .all(|event| event.event_type() == EventType::RELATIVE));
     }
 
     #[test]
