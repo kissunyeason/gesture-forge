@@ -469,6 +469,11 @@ async fn record(args: RecordArgs) -> Result<()> {
 }
 
 async fn gestures(args: GesturesArgs) -> Result<()> {
+    if args.passthrough {
+        anyhow::bail!(
+            "--passthrough is temporarily disabled because the virtual touchpad stream failed MT safety validation"
+        );
+    }
     validate_exclusive_timeout(args.exclusive, args.exclusive_timeout)?;
     let config = load_recognizer_config(args.recognizer_config.as_deref())?;
     let mut tracker = TouchFrameTracker::new();
